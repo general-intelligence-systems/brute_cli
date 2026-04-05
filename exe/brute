@@ -1,0 +1,89 @@
+#!/usr/bin/env ruby
+# frozen_string_literal: true
+
+require "brute_cli"
+require "optparse"
+
+options = { cwd: Dir.pwd, session_id: nil }
+
+OptionParser.new do |opts|
+  opts.banner = "Usage: brute [options] [prompt]"
+  opts.on("-d", "--directory DIR", "Working directory") { |d| options[:cwd] = File.expand_path(d) }
+  opts.on("-s", "--session ID", "Resume a session")    { |id| options[:session_id] = id }
+  opts.on("--list-sessions", "List saved sessions")    { options[:list] = true }
+  opts.on("-v", "--version", "Show version")           { puts "brute #{Brute::VERSION}"; exit }
+  opts.on("-h", "--help", "Show help")                 { puts opts; exit }
+end.parse!
+
+if options[:list]
+  sessions = Brute::Session.list
+  if sessions.empty?
+    puts "No saved sessions."
+  else
+    sessions.each { |s| puts "  #{s[:id]}  #{s[:title] || "(untitled)"}  #{s[:saved_at]}" }
+  end
+  exit
+end
+
+begin
+  session = Brute::Session.new(id: options[:session_id])
+
+  orch = Brute.agent(
+    cwd: options[:cwd],
+    session: session,
+    on_content:     ->(text) { print text },
+    on_reasoning:   ->(_text) { },
+    on_tool_call:   ->(name, args) {
+      $stderr.puts "\n--- [tool] #{name} ---"
+      if args.is_a?(Hash)
+        args.each { |k, v| $stderr.puts "  #{k}: #{v.to_s[0..100]}" }
+      end
+    },
+    on_tool_result: ->(name, result) {
+      if result.is_a?(Hash) && result[:error]
+        $stderr.puts "  [FAILED] #{result[:error]}"
+      else
+        $stderr.puts "  [ok]"
+      end
+    },
+  )
+
+  session.restore(orch.context) if options[:session_id]
+rescue RuntimeError => e
+  BruteCLI.error(e.message.strip)
+  exit 1
+end
+
+prompt = ARGV.join(" ")
+prompt = $stdin.read.strip if prompt.empty? && !$stdin.tty?
+
+begin
+  if prompt.empty?
+    $stderr.puts "brute> (interactive mode, Ctrl-D to exit)\n\n"
+    loop do
+      $stderr.print "brute> "
+      input = $stdin.gets&.chomp
+      break if input.nil? || input.strip == "exit"
+      next if input.strip.empty?
+      puts
+      orch.run(input)
+      puts "\n\n"
+    end
+  else
+    orch.run(prompt)
+    puts
+  end
+rescue Interrupt
+  $stderr.puts "\nAborted."
+  exit 130
+rescue LLM::RateLimitError => e
+  BruteCLI.error("Rate limited by provider. #{e.message}")
+  exit 1
+rescue LLM::ServerError => e
+  BruteCLI.error("Provider returned a server error. #{e.message}")
+  exit 1
+rescue => e
+  BruteCLI.error(e.message)
+  $stderr.puts "  #{e.backtrace.first}".red if ENV["BRUTE_DEBUG"]
+  exit 1
+end
