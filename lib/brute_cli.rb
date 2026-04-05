@@ -12,7 +12,7 @@ rescue LoadError
 end
 
 module BruteCLI
-  VERSION = "0.1.0"
+  VERSION = "0.1.1"
 
   CROSS_MARK   = Emoji.find_by_alias("x").raw
   WARNING_SIGN = Emoji.find_by_alias("warning").raw
