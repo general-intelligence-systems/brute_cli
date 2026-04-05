@@ -25,9 +25,12 @@ if options[:list]
   exit
 end
 
-begin
-  session = Brute::Session.new(id: options[:session_id])
+# Agent is created lazily on first prompt — no API key needed to boot.
+session = Brute::Session.new(id: options[:session_id])
+orch = nil
 
+make_agent = -> {
+  return orch if orch
   orch = Brute.agent(
     cwd: options[:cwd],
     session: session,
@@ -47,12 +50,9 @@ begin
       end
     },
   )
-
   session.restore(orch.context) if options[:session_id]
-rescue RuntimeError => e
-  BruteCLI.error(e.message.strip)
-  exit 1
-end
+  orch
+}
 
 prompt = ARGV.join(" ")
 prompt = $stdin.read.strip if prompt.empty? && !$stdin.tty?
@@ -66,21 +66,19 @@ begin
       break if input.nil? || input.strip == "exit"
       next if input.strip.empty?
       puts
-      orch.run(input)
+      make_agent.call.run(input)
       puts "\n\n"
     end
   else
-    orch.run(prompt)
+    make_agent.call.run(prompt)
     puts
   end
 rescue Interrupt
   $stderr.puts "\nAborted."
   exit 130
-rescue LLM::RateLimitError => e
-  BruteCLI.error("Rate limited by provider. #{e.message}")
-  exit 1
-rescue LLM::ServerError => e
-  BruteCLI.error("Provider returned a server error. #{e.message}")
+rescue RuntimeError, LLM::RateLimitError, LLM::ServerError => e
+  BruteCLI.error(e.message)
+  $stderr.puts "  #{e.backtrace.first}".red if ENV["BRUTE_DEBUG"]
   exit 1
 rescue => e
   BruteCLI.error(e.message)
