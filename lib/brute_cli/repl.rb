@@ -119,8 +119,6 @@ module BruteCLI
 
     def execute(prompt)
       @content_buf = +''
-      @tool_count = 0
-      @start_time = Process.clock_gettime(Process::CLOCK_MONOTONIC)
 
       print_model_line
       start_spinner('Thinking...')
@@ -197,16 +195,30 @@ module BruteCLI
 
     def on_reasoning(_text); end
 
+    INLINE_TOOLS = %w[read fs_search todo_read todo_write fetch].freeze
+    TOOL_ICONS = {
+      'read' => Emoji::EYES, 'patch' => Emoji::HAMMER, 'write' => Emoji::WRITING,
+      'shell' => Emoji::COMPUTER, 'fs_search' => Emoji::MAG, 'fetch' => Emoji::GLOBE,
+      'todo_read' => Emoji::CLIPBOARD, 'todo_write' => Emoji::CLIPBOARD,
+      'remove' => Emoji::WASTEBASKET, 'undo' => Emoji::REWIND, 'delegate' => Emoji::ROBOT
+    }.freeze
+
     def on_tool_call(name, args)
       stop_spinner
       flush_content
-      @tool_count += 1
       @pending_tool = { name: name, args: args }
     end
 
     def on_tool_result(name, result)
       stop_spinner
-      print_tool_box(@pending_tool || { name: name, args: {} }, result)
+      tool = @pending_tool || { name: name, args: {} }
+
+      if INLINE_TOOLS.include?(tool[:name])
+        print_inline_tool(tool, result)
+      else
+        print_block_tool(tool, result)
+      end
+
       @pending_tool = nil
       start_spinner('Thinking...')
     end
@@ -230,40 +242,127 @@ module BruteCLI
       text
     end
 
-    def print_tool_box(tool, result)
-      badge = Styles::TOOL_BADGE.render(tool[:name])
+    def print_inline_tool(tool, result)
+      icon = TOOL_ICONS[tool[:name].to_s] || Emoji::GEAR
+      name = tool[:name].to_s
+      summary = tool_summary(tool) || ''
+
+      if error_result?(result)
+        styled_puts "  #{icon} #{Styles::TOOL_BADGE.render(name)} #{summary} #{Styles::TOOL_FAIL.render('FAILED')}"
+      else
+        styled_puts "  #{icon} #{Styles::TOOL_BADGE.render(name)} #{summary}"
+      end
+    end
+
+    def print_block_tool(tool, result)
+      icon = TOOL_ICONS[tool[:name].to_s] || Emoji::GEAR
+      name = tool[:name].to_s
+      title = "#{icon} #{Styles::TOOL_BADGE.render(name)}"
+
+      body_lines = []
+
+      summary = tool_summary(tool) || ''
+      body_lines << summary unless summary.empty?
+
+      # Diff
+      diff = result.is_a?(Hash) && (result[:diff] || result['diff'])
+      body_lines.concat(format_diff_lines(diff)) if diff && !diff.strip.empty?
+
+      # Shell output
+      stdout = result.is_a?(Hash) && (result[:stdout] || result['stdout'])
+      if stdout && !stdout.strip.empty?
+        lines = stdout.strip.lines.map(&:chomp)
+        lines = lines.first(15) + [Styles::DIM_TEXT.render('... (truncated)')] if lines.size > 15
+        body_lines.concat(lines.map { |l| Styles::DIM_TEXT.render(l) })
+      end
+
+      # Status
+      if error_result?(result)
+        msg = error_message(result)
+        msg = msg[0..70] + '...' if msg.length > 70
+        body_lines << "#{Styles::TOOL_FAIL.render('FAILED')} #{Styles::DIM_TEXT.render(msg)}"
+      else
+        body_lines << Styles::TOOL_OK.render('OK')
+      end
+
+      styled_puts render_titled_frame(title, body_lines)
+    end
+
+    def error_result?(result)
+      return false unless result.is_a?(Hash)
+
+      result[:error] || result['error']
+    end
+
+    def error_message(result)
+      return '' unless result.is_a?(Hash)
+
+      (result[:message] || result['message'] || result[:error] || result['error']).to_s
+    end
+
+    def tool_summary(tool)
       args = tool[:args]
-      header = if args.is_a?(Hash) && !args.empty?
-                 arg_parts = args.map do |k, v|
-                   val = v.to_s
-                   val = val[0..50] + '...' if val.length > 50
-                   "#{Styles::TOOL_ARG_KEY.render(k.to_s)}#{Styles::DIM_TEXT.render('=')}#{Styles::TOOL_ARG_VAL.render(val)}"
-                 end
-                 "#{badge} #{arg_parts.join(' ')}"
-               else
-                 badge
-               end
+      return '' unless args.is_a?(Hash) && !args.empty?
 
-      status = if result.is_a?(Hash) && result[:error]
-                 detail = result[:error].to_s
-                 detail = detail[0..70] + '...' if detail.length > 70
-                 "#{Styles::TOOL_FAIL.render('FAILED')} #{Styles::DIM_TEXT.render(detail)}"
-               else
-                 Styles::TOOL_OK.render('OK')
-               end
+      # Show the most relevant arg (file_path, command, etc.)
+      path = args['file_path'] || args[:file_path]
+      cmd = args['command'] || args[:command]
+      pattern = args['pattern'] || args[:pattern]
 
-      styled_puts Styles::TOOL_FRAME.render("#{header}\n#{status}")
+      if path
+        Styles::DIM_TEXT.render(path.to_s)
+      elsif cmd
+        Styles::DIM_TEXT.render(cmd.to_s[0..60])
+      elsif pattern
+        Styles::DIM_TEXT.render("\"#{pattern}\"")
+      else
+        ''
+      end
+    end
+
+    def format_diff_lines(diff_text)
+      diff_text.lines.map do |line|
+        l = line.chomp
+        case l[0]
+        when '+' then Styles::DIFF_ADDED.render(l)
+        when '-' then Styles::DIFF_REMOVED.render(l)
+        when '@' then Styles::DIFF_HUNK.render(l)
+        else          Styles::DIFF_CONTEXT.render(l)
+        end
+      end
+    end
+
+    def render_titled_frame(title, body_lines)
+      m = Styles::SEPARATOR
+      title_w = visible_width(title)
+      body_w = body_lines.map { |l| visible_width(l) }.max || 0
+      inner_w = [title_w, body_w].max + 2
+
+      top = m.render('╭─ ') + title + ' ' + m.render('─' * [inner_w - title_w - 1, 0].max + '╮')
+      bot = m.render('╰' + '─' * (inner_w + 2) + '╯')
+      mid = body_lines.map do |l|
+        pad = inner_w - visible_width(l)
+        m.render('│') + ' ' + l + ' ' * [pad, 0].max + ' ' + m.render('│')
+      end
+
+      ([top] + mid + [bot]).join("\n")
+    end
+
+    def visible_width(str)
+      str.gsub(/\e\[[0-9;]*m/, '').gsub(/\p{Emoji_Presentation}|\p{Emoji}\uFE0F?/, 'XX').length
     end
 
     # ── Stats ──
 
     def print_stats_bar
-      elapsed = Process.clock_gettime(Process::CLOCK_MONOTONIC) - @start_time
-      tokens = @agent&.env&.dig(:metadata, :tokens) || {}
+      metadata = @agent&.env&.dig(:metadata) || {}
+      tokens = metadata[:tokens] || {}
+      timing = metadata[:timing] || {}
+      tool_calls = metadata[:tool_calls] || 0
       parts = []
       parts << format_stat('tokens', format_tokens(tokens))
-      parts << format_stat('time', format_time(elapsed))
-      parts << format_stat('tools', @tool_count.to_s) if @tool_count > 0
+      parts << format_stat('time', format_time(timing[:total_elapsed] || 0))
+      parts << format_stat('tools', tool_calls.to_s) if tool_calls > 0
       $stdout.puts
       styled_puts separator
       styled_puts '  ' + parts.join(Styles::DIM_TEXT.render('  |  '))

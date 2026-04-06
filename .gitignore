@@ -1,5 +1,6 @@
 *.swp
 Gemfile.lock
+.direnv
 *.gem
 /.bundle/
 /coverage/

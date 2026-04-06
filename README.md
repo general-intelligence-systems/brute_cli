@@ -1,8 +1,8 @@
-# brute_cli
+# 🚀 brute_cli 🔥
 
-Command-line interface for the [Brute](../brute) coding agent.
+Command-line interface for the [Brute](../brute) coding agent. 🤖✨
 
-## Installation
+## 💎 Installation
 
 ```sh
 gem install brute_cli

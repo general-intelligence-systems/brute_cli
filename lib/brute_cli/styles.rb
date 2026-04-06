@@ -35,5 +35,11 @@ module BruteCLI
     TOOL_OK      = foreground(DARK_BG).background(CYAN).padding_left(1).padding_right(1)
     TOOL_FAIL    = foreground(WHITE).background(RED).bold(true).padding_left(1).padding_right(1)
     TOOL_FRAME   = border_style(:rounded).border_foreground(MUTED).padding_left(1).padding_right(1)
+
+    DIFF_ADDED   = foreground('#4fd6be')
+    DIFF_REMOVED = foreground('#c53b53')
+    DIFF_HUNK    = foreground(CYAN).bold(true)
+    DIFF_CONTEXT = foreground(DIM)
+    TOOL_INLINE  = foreground(DIM)
   end
 end

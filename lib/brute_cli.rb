@@ -13,6 +13,7 @@ require 'glamour'
 
 require 'brute_cli/version'
 require 'brute_cli/styles'
+require 'brute_cli/emoji'
 require 'brute_cli/repl'
 
 module BruteCLI
