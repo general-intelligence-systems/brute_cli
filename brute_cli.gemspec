@@ -1,8 +1,10 @@
 # frozen_string_literal: true
 
+require_relative 'lib/brute_cli/version'
+
 Gem::Specification.new do |spec|
   spec.name          = 'brute_cli'
-  spec.version       = '0.1.1'
+  spec.version       = BruteCli::VERSION
   spec.authors       = ['Brute Contributors']
   spec.summary       = 'CLI for the Brute coding agent'
   spec.description   = 'Interactive command-line interface for the Brute coding agent. ' \
