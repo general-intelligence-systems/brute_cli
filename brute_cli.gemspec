@@ -17,6 +17,7 @@ Gem::Specification.new do |spec|
 
   spec.add_dependency "brute", "~> 0.1"
   spec.add_dependency "brute_flow", "~> 0.1"
-  spec.add_dependency "colorize", "~> 1.1"
-  spec.add_dependency "gemoji", "~> 4.1"
+  spec.add_dependency "tty-spinner", "~> 0.9"
+  spec.add_dependency "lipgloss", "~> 0.2"
+  spec.add_dependency "glamour", "~> 0.2"
 end

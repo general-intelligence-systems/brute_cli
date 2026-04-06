@@ -15,73 +15,50 @@ OptionParser.new do |opts|
   opts.on("-h", "--help", "Show help")                 { puts opts; exit }
 end.parse!
 
+# ── List sessions ──
+
 if options[:list]
   sessions = Brute::Session.list
   if sessions.empty?
     puts "No saved sessions."
   else
-    sessions.each { |s| puts "  #{s[:id]}  #{s[:title] || "(untitled)"}  #{s[:saved_at]}" }
+    title_style = Lipgloss::Style.new.bold(true).foreground(BruteCLI::Styles::PURPLE)
+    id_style    = Lipgloss::Style.new.foreground(BruteCLI::Styles::CYAN)
+    time_style  = Lipgloss::Style.new.foreground(BruteCLI::Styles::DIM)
+
+    sessions.each do |s|
+      id    = id_style.render(s[:id][0..7])
+      title = title_style.render(s[:title] || "(untitled)")
+      time  = time_style.render(s[:saved_at].to_s)
+      puts "  #{id}  #{title}  #{time}"
+    end
   end
   exit
 end
 
-# Agent is created lazily on first prompt — no API key needed to boot.
-session = Brute::Session.new(id: options[:session_id])
-orch = nil
-
-make_agent = -> {
-  return orch if orch
-  orch = Brute.agent(
-    cwd: options[:cwd],
-    session: session,
-    on_content:     ->(text) { print text },
-    on_reasoning:   ->(_text) { },
-    on_tool_call:   ->(name, args) {
-      $stderr.puts "\n--- [tool] #{name} ---"
-      if args.is_a?(Hash)
-        args.each { |k, v| $stderr.puts "  #{k}: #{v.to_s[0..100]}" }
-      end
-    },
-    on_tool_result: ->(name, result) {
-      if result.is_a?(Hash) && result[:error]
-        $stderr.puts "  [FAILED] #{result[:error]}"
-      else
-        $stderr.puts "  [ok]"
-      end
-    },
-  )
-  session.restore(orch.context) if options[:session_id]
-  orch
-}
+# ── Collect prompt ──
 
 prompt = ARGV.join(" ")
 prompt = $stdin.read.strip if prompt.empty? && !$stdin.tty?
 
+# ── Run ──
+
+repl = BruteCLI::REPL.new(options)
+
 begin
   if prompt.empty?
-    $stderr.puts "brute> (interactive mode, Ctrl-D to exit)\n\n"
-    loop do
-      $stderr.print "brute> "
-      input = $stdin.gets&.chomp
-      break if input.nil? || input.strip == "exit"
-      next if input.strip.empty?
-      puts
-      make_agent.call.run(input)
-      puts "\n\n"
-    end
+    # Interactive mode
+    repl.run_interactive
   else
-    make_agent.call.run(prompt)
+    # Single prompt mode
+    repl.run_once(prompt)
     puts
   end
 rescue Interrupt
   $stderr.puts "\nAborted."
   exit 130
-rescue RuntimeError, LLM::RateLimitError, LLM::ServerError => e
-  BruteCLI.error(e.message)
-  $stderr.puts "  #{e.backtrace.first}".red if ENV["BRUTE_DEBUG"]
-  exit 1
 rescue => e
   BruteCLI.error(e.message)
-  $stderr.puts "  #{e.backtrace.first}".red if ENV["BRUTE_DEBUG"]
+  $stderr.puts "  #{e.backtrace&.first}" if ENV["BRUTE_DEBUG"]
   exit 1
 end

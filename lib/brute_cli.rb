@@ -1,29 +1,26 @@
 # frozen_string_literal: true
 
-require "brute"
-require "colorize"
-require "emoji"
+require 'brute'
 
-# Optionally load brute_flow if available.
 begin
-  require "brute_flow"
+  require 'brute_flow'
 rescue LoadError
-  # brute_flow is optional for CLI usage
 end
 
+require 'tty-spinner'
+require 'lipgloss'
+require 'glamour'
+
+require 'brute_cli/version'
+require 'brute_cli/styles'
+require 'brute_cli/repl'
+
 module BruteCLI
-  VERSION = "0.1.1"
-
-  CROSS_MARK   = Emoji.find_by_alias("x").raw
-  WARNING_SIGN = Emoji.find_by_alias("warning").raw
-
-  # Print a red error message with a cross mark prefix to stderr.
   def self.error(message)
-    $stderr.puts "#{CROSS_MARK} #{message}".red
+    warn "#{Styles::ERROR_BADGE.render('ERROR')} #{Styles::ERROR_REASON.render(message)}"
   end
 
-  # Print a yellow warning to stderr.
   def self.warn(message)
-    $stderr.puts "#{WARNING_SIGN} #{message}".yellow
+    warn Styles::DIM_TEXT.render("warning: #{message}")
   end
 end
