@@ -37,6 +37,12 @@ module TestHelpers
     $stderr = original
   end
 
+  # Build an Execution instance with stubbed dependencies
+  def build_execution(**options)
+    defaults = { cwd: '/tmp/test', session_id: nil }
+    BruteCLI::Execution.new(defaults.merge(options))
+  end
+
   # Build a REPL instance with stubbed dependencies
   def build_repl(**options)
     defaults = { cwd: '/tmp/test', session_id: nil }

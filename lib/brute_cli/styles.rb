@@ -33,6 +33,9 @@ module BruteCLI
   # Re-derive all accent constants from a new color.
   # Call this before any output (e.g. right after option parsing).
   def self.apply_theme!(name)
+
+    # honestly what the fuck is this shit???????????
+  
     color = THEMES.fetch(name) do
       raise ArgumentError, "Unknown theme #{name.inspect}. Valid themes: #{THEMES.keys.join(', ')}"
     end

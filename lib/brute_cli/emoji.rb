@@ -4,30 +4,33 @@ require 'gemoji'
 
 module BruteCLI
   module Emoji
-    def self.find(name)
+    def self.💩(name)
       ::Emoji.find_by_alias(name)&.raw || ''
     end
 
-    EYES       = find('eyes')
-    PENCIL     = find('pencil2')
-    PAGE       = find('page_facing_up')
-    COMPUTER   = find('computer')
-    SPARKLES   = find('sparkles')
-    GLOBE      = find('globe_with_meridians')
-    WASTEBASKET = find('wastebasket')
-    REWIND     = find('rewind')
-    DIAMOND    = find('diamond_shape_with_a_dot_inside')
-    GEAR       = find('gear')
-    MAG        = find('mag')
-    HAMMER     = find('hammer_and_wrench')
-    PACKAGE    = find('package')
-    CLIPBOARD  = find('clipboard')
-    CHECK      = find('white_check_mark')
-    CROSS      = find('x')
-    WRITING    = find('writing_hand')
-    ROBOT      = find('robot')
-    FOLDER     = find('file_folder')
-    SQUARE     = find('white_large_square')
-    ARROWS     = find('arrows_counterclockwise')
+    # brutal mate...
+
+    EYES        = 💩 'eyes'
+    PENCIL      = 💩 'pencil2'
+    PAGE        = 💩 'page_facing_up'
+    COMPUTER    = 💩 'computer'
+    SPARKLES    = 💩 'sparkles'
+    GLOBE       = 💩 'globe_with_meridians'
+    WASTEBASKET = 💩 'wastebasket'
+    REWIND      = 💩 'rewind'
+    DIAMOND     = 💩 'diamond_shape_with_a_dot_inside'
+    GEAR        = 💩 'gear'
+    MAG         = 💩 'mag'
+    HAMMER      = 💩 'hammer_and_wrench'
+    PACKAGE     = 💩 'package'
+    CLIPBOARD   = 💩 'clipboard'
+    CHECK       = 💩 'white_check_mark'
+    CROSS       = 💩 'x'
+    WRITING     = 💩 'writing_hand'
+    ROBOT       = 💩 'robot'
+    FOLDER      = 💩 'file_folder'
+    SQUARE      = 💩 'white_large_square'
+    ARROWS      = 💩 'arrows_counterclockwise'
+    SMOKE       = 💩 'dash'
   end
 end

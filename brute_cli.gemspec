@@ -17,7 +17,7 @@ Gem::Specification.new do |spec|
   spec.executables   = ['brute']
   spec.require_paths = ['lib']
 
-  spec.add_dependency 'brute', '~> 0.2.0'
+  spec.add_dependency 'brute', '~> 0.4.0'
   spec.add_dependency 'brute_flow', '~> 0.1'
   spec.add_dependency 'gemoji', '~> 4.1'
   spec.add_dependency 'colorize', '~> 1.1'

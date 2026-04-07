@@ -18,43 +18,28 @@ end.parse!
 
 BruteCLI.apply_theme!(options[:theme]) if options[:theme]
 
-# ── List sessions ──
-
 if options[:list]
-  sessions = Brute::Session.list
-  if sessions.empty?
-    puts "No saved sessions."
-  else
-    title_style = Lipgloss::Style.new.bold(true).foreground(BruteCLI::Styles::PURPLE)
-    id_style    = Lipgloss::Style.new.foreground(BruteCLI::Styles::CYAN)
-    time_style  = Lipgloss::Style.new.foreground(BruteCLI::Styles::DIM)
-
-    sessions.each do |s|
-      id    = id_style.render(s[:id][0..7])
-      title = title_style.render(s[:title] || "(untitled)")
-      time  = time_style.render(s[:saved_at].to_s)
-      puts "  #{id}  #{title}  #{time}"
+  Brute::Session.list.tap do |sessions|
+    if sessions.empty?
+      puts "No saved sessions."
+    else
+      puts "Not implemented"
     end
   end
+
   exit
 end
 
-# ── Collect prompt ──
-
-prompt = ARGV.join(" ")
-prompt = $stdin.read.strip if prompt.empty? && !$stdin.tty?
-
-# ── Run ──
-
-repl = BruteCLI::REPL.new(options)
-
 begin
+  prompt = ARGV.join(" ")
+  prompt = $stdin.read.strip if prompt.empty? && !$stdin.tty?
+
   if prompt.empty?
     # Interactive mode
-    repl.run_interactive
+    BruteCLI::REPL.new(options).run
   else
     # Single prompt mode
-    repl.run_once(prompt)
+    BruteCLI::Execution.new(options).run(prompt)
     puts
   end
 rescue Interrupt
