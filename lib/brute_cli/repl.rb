@@ -11,7 +11,16 @@ require "brute_cli/question_screen"
 
 module BruteCLI
   class REPL
-    AGENTS = %w[build plan].freeze
+    AGENTS = %w[build plan bash ruby python nix].freeze
+
+    # Shell-mode agents: agent name → shell interpreter (model name).
+    # These agents use the Shell provider instead of the current LLM provider.
+    SHELL_AGENTS = {
+      "bash"   => "bash",
+      "ruby"   => "ruby",
+      "python" => "python",
+      "nix"    => "nix",
+    }.freeze
 
     def initialize(options = {})
       @options = options
@@ -20,10 +29,12 @@ module BruteCLI
       @session = nil
       @selected_model = nil    # user-chosen model override (nil = provider default)
       @models_cache = nil      # cached model list from provider API
+      @saved_provider = nil    # stashed LLM provider when in shell-mode agent
       @width = TTY::Screen.width
       @content_buf = +""
       @streamer = StreamFormatter.new(width: @width)
       @spinner = nil
+      @last_output = nil  # :separator, :content, or :tool — used to deduplicate separators
       @mu = Mutex.new
     end
 
@@ -75,23 +86,38 @@ module BruteCLI
         end
       }
 
-      # Rebind Tab (^I = byte 9) to cycle agents when the buffer is empty,
-      # otherwise fall through to normal completion. We define a custom method
-      # on the singleton LineEditor instance and point the emacs keymap at it.
+      # Force Reline's config to load now (reads inputrc, registers ANSI
+      # default key bindings).  Without this, the defaults are lazily
+      # applied on the first readmultiline call and overwrite our overrides.
+      unless Reline.core.config.loaded?
+        Reline.core.config.read
+        Reline::IOGate.set_default_key_bindings(Reline.core.config)
+      end
+
+      # Rebind Tab (^I = byte 9) to cycle agents forward when the buffer is
+      # empty, otherwise fall through to normal completion.
+      # Shift+Tab (ESC [ Z = bytes 27,91,90) cycles agents backward.
       repl = self
       Reline.line_editor.define_singleton_method(:cycle_or_complete) do |key|
         if current_line.empty?
-          repl.send(:cycle_agent)
-          # Reline caches prompt_list based on (whole_lines, mode_string).
-          # Since neither changed, the cache returns the stale prompt.
-          # Clear it so the next rerender re-evaluates prompt_proc.
+          repl.send(:cycle_agent, :forward)
           @cache.delete(:prompt_list)
           @cache.delete(:wrapped_prompt_and_input_lines)
         else
           complete(key)
         end
       end
+
+      Reline.line_editor.define_singleton_method(:reverse_cycle_agent) do |_key|
+        if current_line.empty?
+          repl.send(:cycle_agent, :backward)
+          @cache.delete(:prompt_list)
+          @cache.delete(:wrapped_prompt_and_input_lines)
+        end
+      end
+
       Reline.core.config.add_default_key_binding_by_keymap(:emacs, [9], :cycle_or_complete)
+      Reline.core.config.add_default_key_binding_by_keymap(:emacs, [27, 91, 90], :reverse_cycle_agent)
     end
 
     # Reline completion callback.
@@ -139,9 +165,14 @@ module BruteCLI
     # ── Provider ──
 
     def resolve_provider_info
-      provider = Brute.provider rescue nil
-      @provider_name = provider&.name&.to_s
-      @model_name = @selected_model || provider&.default_model&.to_s
+      if (shell_model = SHELL_AGENTS[@current_agent])
+        @provider_name = "shell"
+        @model_name = shell_model
+      else
+        provider = Brute.provider rescue nil
+        @provider_name = provider&.name&.to_s
+        @model_name = @selected_model || provider&.default_model&.to_s
+      end
     end
 
     def model_short
@@ -170,6 +201,14 @@ module BruteCLI
       return if @agent
 
       ensure_session!
+
+      # Shell-mode agents swap the provider to Shell with the right interpreter.
+      if (shell_model = SHELL_AGENTS[@current_agent])
+        activate_shell_agent!(shell_model)
+      else
+        restore_llm_provider!
+      end
+
       @agent = Brute.agent(
         cwd: @options[:cwd] || Dir.pwd,
         model: @selected_model,
@@ -185,6 +224,26 @@ module BruteCLI
       @session.restore(@agent.context) if @options[:session_id]
     end
 
+    # Swap the global provider to Shell with the given interpreter model.
+    # Saves the current LLM provider so it can be restored later.
+    def activate_shell_agent!(shell_model)
+      current = Brute.provider
+      unless current.is_a?(Brute::Providers::Shell)
+        @saved_provider = current
+      end
+      Brute.provider = Brute::Providers::Shell.new
+      @selected_model = shell_model
+    end
+
+    # Restore the saved LLM provider when leaving a shell-mode agent.
+    def restore_llm_provider!
+      if @saved_provider
+        Brute.provider = @saved_provider
+        @saved_provider = nil
+        @selected_model = nil
+      end
+    end
+
     # Force the agent to be recreated on next ensure_agent! call.
     # Used after changing provider, model, or agent.
     def reset_agent!
@@ -196,10 +255,25 @@ module BruteCLI
       "%"
     end
 
-    def cycle_agent
-      idx = (AGENTS.index(@current_agent) + 1) % AGENTS.size
+    def cycle_agent(direction = :forward)
+      step = direction == :backward ? -1 : 1
+      idx = (AGENTS.index(@current_agent) + step) % AGENTS.size
       @current_agent = AGENTS[idx]
       reset_agent!
+
+      # Pre-resolve provider info for the status line.
+      # Shell agents show "shell" provider + interpreter model;
+      # LLM agents show the current LLM provider + model.
+      if (shell_model = SHELL_AGENTS[@current_agent])
+        @provider_name = "shell"
+        @model_name = shell_model
+      else
+        # Peek at what the LLM provider will be (saved or current).
+        provider = @saved_provider || (Brute.provider rescue nil)
+        @provider_name = provider&.name&.to_s
+        @model_name = @selected_model || provider&.default_model&.to_s
+      end
+
       # Rewrite the model/status line sitting one line above the prompt.
       # Save cursor, move up, clear line, print, restore cursor.
       parts = []
@@ -314,8 +388,8 @@ module BruteCLI
           resolve_provider_info
           puts separator
           puts "Provider changed to: #{provider_name.colorize(ACCENT)}"
-          puts "Model: #{@model_name.colorize(ACCENT)}"
-          puts separator
+          puts "Select a model:".colorize(DIM)
+          cmd_model
         else
           puts "Failed to initialize provider: #{provider_name}".colorize(ERROR_FG)
         end
@@ -392,6 +466,7 @@ module BruteCLI
     def execute(prompt)
       @content_buf = +""
       @streamer.reset
+      @last_output = nil
 
       start_spinner("Thinking...")
 
@@ -442,7 +517,8 @@ module BruteCLI
 
     def start_spinner(label)
       stop_spinner
-      puts separator
+      puts separator unless @last_output == :separator
+      @last_output = :separator
       @spinner = TTY::Spinner.new(
         ":spinner #{label}",
         frames: nyan_frames,
@@ -469,6 +545,7 @@ module BruteCLI
         stop_spinner
         @content_buf << text
         @streamer << text
+        @last_output = :content
       end
     end
 
@@ -502,8 +579,9 @@ module BruteCLI
         stop_spinner
         tool = @pending_tool || { name: name, args: {} }
 
-        puts separator
+        puts separator unless @last_output == :separator
         print_tool_result(tool, result)
+        @last_output = :tool
 
         @pending_tool = nil
         start_spinner("Thinking...")
@@ -530,6 +608,7 @@ module BruteCLI
       unless @content_buf.strip.empty?
         @streamer.flush
         @content_buf = +""
+        @last_output = :content
       end
     end
 
@@ -638,8 +717,7 @@ module BruteCLI
       parts << stat_span("out", (tokens[:total_output] || 0).to_s)
       parts << stat_span("time", format_time(timing[:total_elapsed] || 0))
       parts << stat_span("tools", tool_calls.to_s) if tool_calls > 0
-      puts
-      puts separator
+      puts separator unless @last_output == :separator
       puts parts.join(sep)
       puts thick_separator
     end
@@ -660,7 +738,7 @@ module BruteCLI
 
     def print_banner
       puts separator
-      puts BruteCLI::LOGO.chomp.colorize(ACCENT)
+      puts BruteCLI::LOGO.chomp.colorize(DIM)
       puts separator
       puts "Version #{Brute::VERSION}".colorize(DIM)
       if @session
@@ -707,11 +785,11 @@ module BruteCLI
     end
 
     def separator
-      ("─" * [@width, 40].max).colorize(ACCENT)
+      ("─" * [@width, 40].max).colorize(DIM)
     end
 
     def thick_separator
-      ("═" * [@width, 40].max).colorize(ACCENT)
+      ("═" * [@width, 40].max).colorize(DIM)
     end
 
     def detect_width

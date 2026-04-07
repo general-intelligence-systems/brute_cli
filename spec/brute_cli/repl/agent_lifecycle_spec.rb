@@ -25,15 +25,12 @@ RSpec.describe BruteCLI::REPL do
 
     it 'creates a new agent with correct parameters' do
       expect(Brute).to receive(:agent).with(
-        cwd: '/tmp/test',
-        model: nil,
-        session: session,
-        logger: instance_of(Logger),
-        on_content: anything,
-        on_reasoning: anything,
-        on_tool_call: anything,
-        on_tool_result: anything,
-        on_question: anything
+        hash_including(
+          cwd: '/tmp/test',
+          model: nil,
+          agent_name: 'build',
+          session: session,
+        )
       ).and_return(agent)
       invoke_private(repl, :ensure_agent!)
     end

@@ -28,7 +28,8 @@ module BruteCLI
  888   888  888      888   888    888 . 888    .o 
  `Y8bod8P' d888b     `V88V"V8P'   "888" `Y8bod8P' 
   LOGO
-                                                  
+
+  # yolo, bruv...
 
   def self.error(message)
     $stderr.puts "#{"ERROR".colorize(ERROR_BG)} #{message.colorize(ERROR_FG)}"

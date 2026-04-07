@@ -22,7 +22,7 @@ module BruteCLI
 
   # Named color/style constants for use with "string".colorize(CONST).
   # Compound styles (bold + color, background + foreground) use the hash form.
-  DIM         = :light_black
+  DIM         = :grey
   ACCENT      = COLOR
   ACCENT_BOLD = { color: COLOR, mode: :bold }
   ACCENT_BG   = { color: :black, background: COLOR, mode: :bold }

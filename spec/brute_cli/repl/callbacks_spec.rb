@@ -114,6 +114,133 @@ RSpec.describe BruteCLI::REPL do
     end
   end
 
+  describe '@last_output separator deduplication' do
+    let(:new_spinner) { instance_double(TTY::Spinner, auto_spin: nil) }
+
+    before do
+      repl.instance_variable_set(:@pending_tool, { name: 'read', args: {} })
+      allow(spinner).to receive(:stop)
+      allow(TTY::Spinner).to receive(:new).and_return(new_spinner)
+    end
+
+    it 'prints separator before tool result when last output was content' do
+      repl.instance_variable_set(:@last_output, :content)
+      allow(repl).to receive(:print_tool_result)
+
+      output = capture_stdout { invoke_private(repl, :on_tool_result, 'read', {}) }
+      sep = invoke_private(repl, :separator)
+      # Should contain at least one separator (from on_tool_result itself)
+      expect(output).to include('─')
+    end
+
+    it 'skips separator in on_tool_result when last output is already a separator' do
+      repl.instance_variable_set(:@last_output, :separator)
+      allow(repl).to receive(:print_tool_result)
+
+      output = capture_stdout { invoke_private(repl, :on_tool_result, 'read', {}) }
+      # on_tool_result should NOT print a separator, but start_spinner will print one
+      # Count separators: should only be one (from start_spinner, since last_output
+      # was :tool after print_tool_result, not :separator)
+      sep_line = invoke_private(repl, :separator)
+      lines = output.lines.map(&:strip).select { |l| l == sep_line.strip }
+      # Only the separator from start_spinner (after tool result sets @last_output = :tool)
+      expect(lines.size).to eq(1)
+    end
+
+    it 'skips separator in start_spinner when last output is already a separator' do
+      repl.instance_variable_set(:@spinner, nil)
+      repl.instance_variable_set(:@last_output, :separator)
+
+      output = capture_stdout { invoke_private(repl, :start_spinner, 'Thinking...') }
+      sep_line = invoke_private(repl, :separator)
+      lines = output.lines.map(&:strip).select { |l| l == sep_line.strip }
+      expect(lines.size).to eq(0)
+    end
+
+    it 'prints separator in start_spinner when last output was content' do
+      repl.instance_variable_set(:@spinner, nil)
+      repl.instance_variable_set(:@last_output, :content)
+
+      output = capture_stdout { invoke_private(repl, :start_spinner, 'Thinking...') }
+      expect(output).to include('─')
+    end
+
+    it 'prints separator in start_spinner when last output was tool' do
+      repl.instance_variable_set(:@spinner, nil)
+      repl.instance_variable_set(:@last_output, :tool)
+
+      output = capture_stdout { invoke_private(repl, :start_spinner, 'Thinking...') }
+      expect(output).to include('─')
+    end
+
+    it 'sets last_output to :content on on_content' do
+      invoke_private(repl, :on_content, 'hello')
+      expect(repl.instance_variable_get(:@last_output)).to eq(:content)
+    end
+
+    it 'sets last_output to :tool after on_tool_result' do
+      allow(repl).to receive(:print_tool_result)
+      invoke_private(repl, :on_tool_result, 'read', {})
+      # start_spinner sets it to :separator at the end, but the tool result
+      # itself sets :tool first — verify the final state is :separator
+      # (because start_spinner runs last inside on_tool_result)
+      expect(repl.instance_variable_get(:@last_output)).to eq(:separator)
+    end
+
+    it 'sets last_output to :separator after start_spinner' do
+      repl.instance_variable_set(:@spinner, nil)
+      repl.instance_variable_set(:@last_output, :content)
+      capture_stdout { invoke_private(repl, :start_spinner, 'Thinking...') }
+      expect(repl.instance_variable_get(:@last_output)).to eq(:separator)
+    end
+
+    it 'consecutive tool results produce only one separator between them' do
+      # Simulate: tool_result → tool_result (no content in between)
+      # First tool result starts with @last_output = nil
+      repl.instance_variable_set(:@last_output, nil)
+      allow(repl).to receive(:print_tool_result)
+
+      # First on_tool_result
+      output1 = capture_stdout { invoke_private(repl, :on_tool_result, 'read', {}) }
+
+      # After on_tool_result, @last_output is :separator (set by start_spinner)
+      expect(repl.instance_variable_get(:@last_output)).to eq(:separator)
+
+      # Second on_tool_result (last_output is now :separator from start_spinner)
+      repl.instance_variable_set(:@pending_tool, { name: 'write', args: {} })
+      # Replace the spinner with a fresh stub
+      second_spinner = instance_double(TTY::Spinner, auto_spin: nil)
+      repl.instance_variable_set(:@spinner, new_spinner)
+      allow(new_spinner).to receive(:spinning?).and_return(true)
+      allow(new_spinner).to receive(:stop)
+      allow(TTY::Spinner).to receive(:new).and_return(second_spinner)
+
+      output2 = capture_stdout { invoke_private(repl, :on_tool_result, 'write', {}) }
+
+      sep_line = invoke_private(repl, :separator)
+      # Second call should NOT have a separator at the start (it was already :separator)
+      # It will have one from start_spinner at the end (since @last_output becomes :tool first)
+      seps_in_output2 = output2.lines.map(&:strip).count { |l| l == sep_line.strip }
+      expect(seps_in_output2).to eq(1) # only the one from start_spinner
+    end
+
+    it 'does not set last_output to :content when flush_content has blank buffer' do
+      repl.instance_variable_set(:@content_buf, +'')
+      repl.instance_variable_set(:@last_output, :separator)
+      invoke_private(repl, :flush_content)
+      expect(repl.instance_variable_get(:@last_output)).to eq(:separator)
+    end
+
+    it 'sets last_output to :content when flush_content has real content' do
+      repl.instance_variable_set(:@content_buf, +'Hello world')
+      streamer = repl.instance_variable_get(:@streamer)
+      streamer << 'Hello world'
+      repl.instance_variable_set(:@last_output, :separator)
+      capture_stdout { invoke_private(repl, :flush_content) }
+      expect(repl.instance_variable_get(:@last_output)).to eq(:content)
+    end
+  end
+
   # ── Bug: no thread safety on shared REPL state ───────────────────────
   #
   # In streaming mode, on_content fires inline with the SSE parser (main
