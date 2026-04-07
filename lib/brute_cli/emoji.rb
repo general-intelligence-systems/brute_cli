@@ -27,5 +27,7 @@ module BruteCLI
     WRITING    = find('writing_hand')
     ROBOT      = find('robot')
     FOLDER     = find('file_folder')
+    SQUARE     = find('white_large_square')
+    ARROWS     = find('arrows_counterclockwise')
   end
 end

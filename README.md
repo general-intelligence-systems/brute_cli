@@ -1,8 +1,8 @@
-# 🚀 brute_cli 🔥
+# brute_cli
 
-Command-line interface for the [Brute](../brute) coding agent. 🤖✨
+Command-line interface for the [Brute](../brute) coding agent.
 
-## 💎 Installation
+## Installation
 
 ```sh
 gem install brute_cli
@@ -135,3 +135,11 @@ brute "Add a /health endpoint that returns JSON with the app version, database s
 
 - [brute](../brute) — core agent library
 - [brute_flow](../brute_flow) — BPMN flow engine (optional, loaded if available)
+
+---
+
+## Fun Fact
+
+Why don't AI coding agents ever get tired? Because they run on coffee... I mean, tokens! ☕️🤖
+
+*Made with ❤️ by the Brute team*

@@ -11,9 +11,12 @@ OptionParser.new do |opts|
   opts.on("-d", "--directory DIR", "Working directory") { |d| options[:cwd] = File.expand_path(d) }
   opts.on("-s", "--session ID", "Resume a session")    { |id| options[:session_id] = id }
   opts.on("--list-sessions", "List saved sessions")    { options[:list] = true }
+  opts.on("--theme NAME", "Color theme (#{BruteCLI::THEMES.keys.join(', ')})") { |t| options[:theme] = t }
   opts.on("-v", "--version", "Show version")           { puts "brute #{Brute::VERSION}"; exit }
   opts.on("-h", "--help", "Show help")                 { puts opts; exit }
 end.parse!
+
+BruteCLI.apply_theme!(options[:theme]) if options[:theme]
 
 # ── List sessions ──
 
