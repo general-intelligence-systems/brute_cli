@@ -10,7 +10,7 @@ Gem::Specification.new do |spec|
   spec.description   = 'Interactive command-line interface for the Brute coding agent. ' \
                         'Supports single-prompt, interactive, piped, and session modes.'
   spec.license       = 'MIT'
-  spec.required_ruby_version = '>= 3.2'
+  spec.required_ruby_version = '>= 3.0'
 
   spec.files         = Dir['lib/**/*.rb', 'exe/*']
   spec.bindir        = 'exe'
@@ -21,7 +21,7 @@ Gem::Specification.new do |spec|
   spec.add_dependency 'brute_flow', '~> 0.1'
   spec.add_dependency 'gemoji', '~> 4.1'
   spec.add_dependency 'colorize', '~> 1.1'
-  spec.add_dependency 'reline', '>= 0.5'
+  spec.add_dependency 'reline', '~> 0.5'
   spec.add_dependency 'tty-markdown', '~> 0.7'
   spec.add_dependency 'tty-screen', '~> 0.8'
   spec.add_dependency 'bubbletea', '~> 0.1'
