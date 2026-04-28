@@ -6,7 +6,6 @@ require "json"
 require "pp"
 require "securerandom"
 require "brute_cli/styles"
-require "brute_cli/phase"
 require "brute_cli/tool_output"
 
 module BruteCLI
@@ -64,31 +63,23 @@ module BruteCLI
 
     def execute(prompt)
       @event_handler = build_event_handler
-      @event_handler.reset!
       @event_handler.start_spinner
 
       begin
         @session.user(prompt)
         env = @agent.call(@session, events: @event_handler)
-        if env.is_a?(Hash) && env[:metadata].is_a?(Hash)
-          @event_handler.merge_metadata!(env[:metadata])
-        end
       rescue Interrupt
         @event_handler.stop_spinner
-        @event_handler.flush_content
-        @terminal.buffer << "Aborted.".colorize(DIM)
         print_stats_bar
         return
       rescue => e
         @event_handler.stop_spinner
-        @event_handler.flush_content
         print_error(e)
         print_stats_bar
         return
       end
 
       @event_handler.stop_spinner
-      @event_handler.flush_content
       print_stats_bar
     end
 

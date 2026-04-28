@@ -29,7 +29,7 @@ module BruteCLI
           session_dir = @session_path ? File.dirname(@session_path) : nil
           buf << @terminal.separator
           buf << "session_id:  ".colorize(DIM) + @session_id.colorize(ACCENT)
-          buf << "session_log: ".colorize(DIM) + session_dir.colorize(ACCENT) if session_dir
+          buf << "session_log: ".colorize(DIM) + "#{session_dir}/session.jsonl".colorize(ACCENT) if session_dir
         end
 
         check_dependencies
