@@ -2,19 +2,15 @@
 
 RSpec.describe BruteCLI::Execution, "mode switching" do
   let(:execution) { build_execution(cwd: "/tmp/test") }
-  let(:session) { instance_double(Brute::Session, restore: nil) }
   let(:agent) do
-    instance_double(
-      "agent",
-      run: nil,
-      env: { metadata: { tokens: {}, timing: {}, tool_calls: 0 } },
-      context: double("context"),
-    )
+    instance_double('Brute::Agent', call: nil)
   end
+  let(:session) { Brute::Session.new }
 
   before do
     allow(Brute::Session).to receive(:new).and_return(session)
-    allow(Brute).to receive(:agent).and_return(agent)
+    allow(Brute::Agent).to receive(:new).and_return(agent)
+    allow(FileUtils).to receive(:mkdir_p)
   end
 
   # ── Initial state ──
@@ -24,8 +20,10 @@ RSpec.describe BruteCLI::Execution, "mode switching" do
       expect(execution.current_agent).to eq("build")
     end
 
-    it "passes agent_name: 'build' to Brute.agent on first ensure_agent!" do
-      expect(Brute).to receive(:agent).with(hash_including(agent_name: "build")).and_return(agent)
+    it "builds an LLM agent on first ensure_agent!" do
+      expect(Brute::Agent).to receive(:new).with(
+        hash_including(provider: anything, tools: Brute::Tools::ALL)
+      ).and_return(agent)
       execution.ensure_agent!
     end
   end
@@ -64,21 +62,22 @@ RSpec.describe BruteCLI::Execution, "mode switching" do
   # ── Agent recreation after switching current_agent ──
 
   describe "agent recreation after switching current_agent" do
-    it "passes agent_name: 'plan' after setting current_agent to plan" do
+    it "rebuilds agent after setting current_agent to plan" do
       execution.current_agent = "plan"
       execution.agent = nil
 
-      expect(Brute).to receive(:agent).with(hash_including(agent_name: "plan")).and_return(agent)
+      expect(Brute::Agent).to receive(:new).and_return(agent)
       execution.ensure_agent!
     end
 
-    it "passes the same session object for the new agent" do
+    it "preserves the same session object for the new agent" do
       execution.ensure_agent!
       execution.current_agent = "plan"
       execution.agent = nil
 
-      expect(Brute).to receive(:agent).with(hash_including(session: session)).and_return(agent)
+      expect(Brute::Agent).to receive(:new).and_return(agent)
       execution.ensure_agent!
+      expect(execution.instance_variable_get(:@session)).to equal(session)
     end
   end
 
@@ -91,7 +90,7 @@ RSpec.describe BruteCLI::Execution, "mode switching" do
       execution.current_agent = "plan"
       execution.agent = nil
 
-      expect(Brute).to receive(:agent).once.with(hash_including(agent_name: "plan")).and_return(agent)
+      expect(Brute::Agent).to receive(:new).once.and_return(agent)
       execution.ensure_agent!
 
       # Second call should be idempotent
@@ -99,21 +98,26 @@ RSpec.describe BruteCLI::Execution, "mode switching" do
     end
   end
 
-  # ── Regression: agent_switched is never passed ──
+  # ── Shell agent mode ──
 
-  describe "agent_switched context key (regression)" do
-    it "does NOT pass agent_switched to Brute.agent" do
-      execution.current_agent = "plan"
+  describe "shell agent mode" do
+    it "builds a shell agent for bash" do
+      execution.current_agent = "bash"
       execution.agent = nil
+
+      expect(Brute::Agent).to receive(:new).with(
+        hash_including(provider: :shell, model: "bash")
+      ).and_return(agent)
       execution.ensure_agent!
+    end
 
-      execution.current_agent = "build"
+    it "builds a shell agent for ruby" do
+      execution.current_agent = "ruby"
       execution.agent = nil
 
-      expect(Brute).to receive(:agent) do |**kwargs|
-        expect(kwargs).not_to have_key(:agent_switched)
-        agent
-      end
+      expect(Brute::Agent).to receive(:new).with(
+        hash_including(provider: :shell, model: "ruby")
+      ).and_return(agent)
       execution.ensure_agent!
     end
   end

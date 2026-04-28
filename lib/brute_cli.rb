@@ -18,6 +18,7 @@ require 'brute_cli/commands'
 require 'brute_cli/spinner'
 require 'brute_cli/configuration'
 require 'brute_cli/buffer_output'
+require 'brute_cli/cli_event_handler'
 require 'brute_cli/execution'
 require 'brute_cli/repl'
 

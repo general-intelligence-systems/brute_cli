@@ -7,24 +7,22 @@ module BruteCLI
   #
   # Tokens arrive one-at-a-time from the LLM via SSE. The StreamFormatter
   # accumulates them into a buffer, printing raw characters for
-  # immediate feedback. On each newline, the entire buffer is
-  # re-rendered through TTY::Markdown.parse and the previous output
-  # is overwritten via ANSI cursor save/restore.
+  # immediate feedback. On each newline, new content is rendered
+  # through TTY::Markdown.parse and only the uncommitted lines are
+  # printed — previously rendered lines are left on screen untouched.
   #
-  # Uses DEC save/restore cursor (\e7 / \e8) — the terminal
-  # tracks its own position, so we don't need fragile manual
-  # row/column accounting.
+  # This forward-only approach avoids cursor-repositioning bugs that
+  # occur when terminal scrolling invalidates saved positions (both
+  # DEC save/restore and cursor-up are affected).
   #
   #   fmt = BruteCLI::StreamFormatter.new(width: 80)
   #   streamer << "# He"          # prints raw "# He"
-  #   streamer << "llo World\n"   # re-renders as styled "Hello World"
+  #   streamer << "llo World\n"   # replaces raw chars with styled "Hello World"
   #   streamer.flush              # finalize any partial line
   #   streamer.reset              # ready for next turn
   #
   class StreamFormatter
-    SAVE_CURSOR    = "\e7"
-    RESTORE_CURSOR = "\e8"
-    CLEAR_TO_END   = "\e[J"
+    CLEAR_TO_EOL = "\e[K"
 
     def initialize(output: nil, width: nil)
       @output = output
@@ -46,25 +44,24 @@ module BruteCLI
     def flush
       return if @buffer.empty? && @line_buf.empty?
       @buffer << @line_buf unless @line_buf.empty?
-      restore_and_render
+      render_new_lines
       out.puts
-      @buffer       = +""
-      @line_buf     = +""
-      @origin_saved = false
+      @buffer          = +""
+      @line_buf        = +""
+      @committed_lines = 0
     end
 
     # Reset all state for the next agent turn.
     def reset
-      @buffer       = +""
-      @line_buf     = +""
-      @origin_saved = false
+      @buffer          = +""
+      @line_buf        = +""
+      @committed_lines = 0
     end
 
     private
 
     # Process a single character.
     def consume(ch)
-      save_origin unless @origin_saved
       @line_buf << ch
       if ch == "\n"
         finish_line
@@ -73,28 +70,29 @@ module BruteCLI
       end
     end
 
-    # Save the cursor position at the start of this output block.
-    # Called once before the first character is printed, then not
-    # again until after a flush or reset.
-    def save_origin
-      out.print SAVE_CURSOR
-      @origin_saved = true
-    end
-
-    # A complete line arrived — append to the buffer and re-render.
+    # A complete line arrived — append to the buffer and render any
+    # new lines that TTY::Markdown produced.
     def finish_line
       @buffer << @line_buf
       @line_buf = +""
-      restore_and_render
+      render_new_lines
     end
 
-    # Restore cursor to the saved origin, clear everything after it,
-    # and print the fully rendered markdown.
-    def restore_and_render
-      rendered = render_markdown(@buffer)
-      out.print RESTORE_CURSOR
-      out.print CLEAR_TO_END
-      out.print rendered
+    # Render the full buffer through TTY::Markdown for proper context
+    # (code fences, lists, etc.), then print only the lines that
+    # haven't been committed to screen yet. The raw characters on the
+    # current line are cleared first with \r + clear-to-EOL.
+    def render_new_lines
+      rendered  = render_markdown(@buffer)
+      lines     = rendered.lines
+      new_lines = lines[@committed_lines..] || []
+
+      # Clear the raw chars on the current line, then print new content.
+      out.print "\r"
+      out.print CLEAR_TO_EOL
+      new_lines.each { |line| out.print line }
+
+      @committed_lines = lines.length
     end
 
     def render_markdown(text)

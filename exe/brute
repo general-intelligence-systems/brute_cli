@@ -19,11 +19,12 @@ end.parse!
 BruteCLI.apply_theme!(options[:theme]) if options[:theme]
 
 if options[:list]
-  Brute::Session.list.tap do |sessions|
-    if sessions.empty?
-      puts "No saved sessions."
-    else
-      puts "Not implemented"
+  sessions = BruteCLI::Execution.list_sessions
+  if sessions.empty?
+    puts "No saved sessions."
+  else
+    sessions.each do |s|
+      puts "#{s[:id]}  #{s[:mtime].strftime('%Y-%m-%d %H:%M:%S')}"
     end
   end
 

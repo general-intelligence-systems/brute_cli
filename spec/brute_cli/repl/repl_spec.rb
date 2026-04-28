@@ -72,15 +72,41 @@ RSpec.describe BruteCLI::REPL do
     end
 
     it 'resets the agent on each cycle' do
-      allow(Brute::Session).to receive(:new).and_return(instance_double(Brute::Session, restore: nil))
-      allow(Brute).to receive(:agent).and_return(
-        instance_double("agent", run: nil, env: {}, context: double("context"))
+      allow(Brute::Session).to receive(:new).and_return(Brute::Session.new)
+      allow(Brute::Agent).to receive(:new).and_return(
+        instance_double('Brute::Agent', call: nil)
       )
+      allow(FileUtils).to receive(:mkdir_p)
       execution.ensure_agent!
       expect(execution.agent).not_to be_nil
 
       invoke_private(repl, :cycle_agent, :forward)
       expect(execution.agent).to be_nil
+    end
+  end
+
+  describe '.configured_providers' do
+    it 'includes providers with API keys set' do
+      allow(ENV).to receive(:[]).and_call_original
+      allow(ENV).to receive(:[]).with('ANTHROPIC_API_KEY').and_return('sk-test')
+      allow(ENV).to receive(:[]).with('OPENAI_API_KEY').and_return('sk-test')
+
+      providers = BruteCLI::REPL.configured_providers
+      expect(providers).to include('anthropic')
+      expect(providers).to include('openai')
+    end
+
+    it 'always includes ollama' do
+      providers = BruteCLI::REPL.configured_providers
+      expect(providers).to include('ollama')
+    end
+
+    it 'excludes providers without API keys' do
+      allow(ENV).to receive(:[]).and_call_original
+      allow(ENV).to receive(:[]).with('DEEPSEEK_API_KEY').and_return(nil)
+
+      providers = BruteCLI::REPL.configured_providers
+      expect(providers).not_to include('deepseek')
     end
   end
 end

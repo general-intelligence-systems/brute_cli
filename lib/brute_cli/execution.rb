@@ -4,6 +4,7 @@ require "logger"
 require "io/console"
 require "json"
 require "pp"
+require "securerandom"
 require "brute_cli/styles"
 require "brute_cli/phase"
 require "brute_cli/tool_output"
@@ -34,6 +35,9 @@ module BruteCLI
       "nix"    => "nix",
     }.freeze
 
+    # Default sessions directory: ~/.brute/sessions/
+    SESSIONS_DIR = File.join(Dir.home, ".brute", "sessions")
+
     attr_reader :current_agent, :provider_name, :model_name
     attr_accessor :agent
     attr_writer :selected_model, :current_agent
@@ -50,6 +54,7 @@ module BruteCLI
       @spinner = spinner_class.new
       @last_output = nil  # :separator, :content, or :tool — used to deduplicate separators
       @current_phase = nil
+      @event_handler = nil
     end
 
     # Run a single prompt against the agent.  This is the primary public API.
@@ -66,7 +71,9 @@ module BruteCLI
       start_spinner
 
       begin
-        @agent.run(prompt)
+        @event_handler = build_event_handler
+        @session.user(prompt)
+        @agent.call(@session, events: @event_handler)
       rescue Interrupt
         stop_spinner
         flush_content
@@ -95,8 +102,8 @@ module BruteCLI
         @model_name = shell_model
       else
         provider = Brute.provider rescue nil
-        @provider_name = provider&.name&.to_s
-        @model_name = @selected_model || provider&.default_model&.to_s
+        @provider_name = provider.to_s
+        @model_name = @selected_model || default_model_for(provider)
       end
     end
 
@@ -107,34 +114,108 @@ module BruteCLI
     # ── Agent ──
 
     def ensure_session!
-      @session ||= Brute::Session.new(id: @options[:session_id])
+      return if @session
+
+      if @options[:session_id]
+        path = session_path(@options[:session_id])
+        if File.exist?(path)
+          @session = Brute::Session.from_jsonl(path)
+        else
+          @session = Brute::Session.new(path: path)
+        end
+      else
+        id = SecureRandom.hex(8)
+        @session = Brute::Session.new(path: session_path(id))
+      end
     end
 
     def ensure_agent!
       return if @agent
 
       ensure_session!
-
-      @agent = Brute.agent(
-        cwd: @options[:cwd] || Dir.pwd,
-        model: @selected_model,
-        agent_name: @current_agent,
-        session: @session,
-        logger: Logger.new(File::NULL),
-        on_content:          method(:on_content),
-        on_reasoning:        method(:on_reasoning),
-        on_tool_call_start:  method(:on_tool_call_start),
-        on_tool_result:      method(:on_tool_result),
-        # on_question: disabled until bubbletea terminal integration is fixed
-      )
-      @session.restore(@agent.context) if @options[:session_id]
+      resolve_provider_info
+      @agent = build_agent
     end
 
     def detect_width
       TTY::Screen.width
     end
 
+    # Session ID derived from the session path.
+    def session_id
+      return @options[:session_id] if @options[:session_id]
+      return nil unless @session&.path
+      File.basename(File.dirname(@session.path))
+    end
+
+    # List saved sessions by scanning the sessions directory.
+    def self.list_sessions
+      dir = SESSIONS_DIR
+      return [] unless Dir.exist?(dir)
+
+      Dir.glob(File.join(dir, "*", "session.jsonl")).map do |path|
+        {
+          id: File.basename(File.dirname(path)),
+          path: path,
+          mtime: File.mtime(path),
+        }
+      end.sort_by { |s| s[:mtime] }.reverse
+    end
+
     private
+
+      # ── Session Path ──
+
+      def session_path(id)
+        File.join(SESSIONS_DIR, id, "session.jsonl")
+      end
+
+      # ── Agent Builder ──
+
+      def build_agent
+        if (shell_model = SHELL_AGENTS[@current_agent])
+          build_shell_agent(shell_model)
+        else
+          build_llm_agent
+        end
+      end
+
+      def build_llm_agent
+        logger = Logger.new(File::NULL)
+
+        Brute::Agent.new(
+          provider: Brute.provider,
+          model: @selected_model,
+          tools: Brute::Tools::ALL,
+        ) do
+          use Brute::Middleware::SystemPrompt
+          use Brute::Middleware::Tracing, logger: logger
+          use Brute::Middleware::ToolResultLoop
+          use Brute::Middleware::MaxIterations
+          use Brute::Middleware::ToolCall
+          run Brute::Middleware::LLMCall.new
+        end
+      end
+
+      def build_shell_agent(shell_model)
+        shell_provider = Brute::Providers::Shell.new
+
+        Brute::Agent.new(
+          provider: :shell,
+          model: shell_model,
+          tools: [Brute::Tools::Shell],
+        ) do
+          use Brute::Middleware::ToolResultLoop
+          use Brute::Middleware::MaxIterations, max_iterations: 2
+          use Brute::Middleware::ToolCall
+          run ShellCallTerminal.new(shell_provider)
+        end
+      end
+
+      # Build the event handler for this call, wired to this Execution.
+      def build_event_handler
+        CLIEventHandler.new(Brute::Pipeline::NullSink.new, execution: self)
+      end
 
       # ── Spinner ──
 
@@ -157,8 +238,8 @@ module BruteCLI
 
       # ── Callbacks ──
       #
-      # All callbacks fire sequentially on the same thread — no
-      # synchronization needed.  The orchestrator guarantees:
+      # Called by CLIEventHandler when events arrive from the agent pipeline.
+      # All callbacks fire sequentially — no synchronization needed.
       #
       #   on_content* → on_tool_call_start → on_tool_result* → (repeat)
       #
@@ -207,20 +288,6 @@ module BruteCLI
         end
       end
 
-      # TODO: Interactive question forms are disabled while the bubbletea
-      # terminal integration is being worked on. For now, auto-select the
-      # first option for each question so the agent can continue.
-      def on_question(questions, reply_queue)
-        answers = questions.map do |q|
-          q = q.respond_to?(:transform_keys) ? q.transform_keys(&:to_s) : q
-          options = (q["options"] || []).map { |o| o.respond_to?(:transform_keys) ? o.transform_keys(&:to_s) : o }
-          first = options.first
-          first ? [first["label"].to_s] : []
-        end
-
-        reply_queue.push(answers)
-      end
-
       # ── Output ──
 
       def flush_content
@@ -245,7 +312,7 @@ module BruteCLI
       # ── Stats ──
 
       def print_stats_bar
-        metadata = @agent&.env&.dig(:metadata) || {}
+        metadata = @event_handler&.metadata || {}
         puts BufferOutput::Separator.new(width: @width) unless @last_output == :separator
         puts BufferOutput::StatsBar.new(metadata, width: @width)
         puts BufferOutput::Separator.new(width: @width, thick: true)
@@ -256,5 +323,38 @@ module BruteCLI
       def print_error(err)
         puts BufferOutput::Error.new(err)
       end
-    end
+
+      # ── Provider Helpers ──
+
+      def default_model_for(provider_sym)
+        # Use RubyLLM to look up the default model for a provider if possible.
+        # Falls back to nil (let the provider decide).
+        nil
+      end
+
+      # ── Shell Agent Terminal ──
+      # A terminal middleware that uses Brute::Providers::Shell instead of
+      # RubyLLM::Provider.resolve. Mimics LLMCall but delegates to the
+      # Shell pseudo-provider.
+
+      class ShellCallTerminal
+        def initialize(shell_provider)
+          @shell = shell_provider
+        end
+
+        def call(env)
+          response = @shell.complete(
+            env[:messages].to_a,
+            model: env[:model],
+            tools: env[:tools],
+          )
+
+          response.messages.each do |msg|
+            env[:messages] << msg
+          end
+
+          env
+        end
+      end
+  end
 end

@@ -11,9 +11,32 @@ module BruteCLI
   #
   # For non-interactive (pipe / single-prompt) use, use Execution directly.
   class REPL
+    # Mapping of provider name to the env var that indicates it's configured.
+    PROVIDER_ENV_KEYS = {
+      "anthropic"   => "ANTHROPIC_API_KEY",
+      "openai"      => "OPENAI_API_KEY",
+      "gemini"      => "GEMINI_API_KEY",
+      "azure"       => "AZURE_API_KEY",
+      "bedrock"     => "AWS_ACCESS_KEY_ID",
+      "deepseek"    => "DEEPSEEK_API_KEY",
+      "mistral"     => "MISTRAL_API_KEY",
+      "ollama"      => "OLLAMA_API_KEY",
+      "openrouter"  => "OPENROUTER_API_KEY",
+      "perplexity"  => "PERPLEXITY_API_KEY",
+      "xai"         => "XAI_API_KEY",
+    }.freeze
+
+    # Returns an array of provider name strings that have API keys configured.
+    # Ollama is always included (it doesn't strictly require a key for local use).
+    def self.configured_providers
+      configured = PROVIDER_ENV_KEYS.select { |_name, key| ENV[key] && !ENV[key].empty? }.keys
+      configured << "ollama" unless configured.include?("ollama")
+      configured.sort
+    end
+
     def initialize(options = {})
       @execution = Execution.new(options)
-      @saved_provider = nil  # stashed LLM provider when in shell-mode agent
+      @saved_provider = nil  # stashed LLM provider symbol when in shell-mode agent
     end
 
     # Start the interactive REPL loop.
@@ -184,18 +207,15 @@ module BruteCLI
     end
 
     def select_provider(provider_name)
-      new_provider = Brute.provider_for(provider_name)
-      return nil unless new_provider
-
-      Brute.provider = new_provider
+      Brute.provider = provider_name.to_sym
       @execution.selected_model = nil
       reset_agent!
       @execution.resolve_provider_info
       @models_cache = nil
-      new_provider
+      provider_name
     end
 
-    # Fetch available chat models from the current provider.
+    # Fetch available chat models from the current provider via RubyLLM.
     # Results are cached to avoid repeated API calls; cleared on provider change.
     def fetch_models
       return @models_cache if @models_cache
@@ -204,28 +224,30 @@ module BruteCLI
       return [] unless provider
 
       begin
-        all = provider.models.all
-        @models_cache = all.select(&:chat?).map { |m| m.id.to_s }.sort
+        Brute.config # ensure RubyLLM is configured
+        all = RubyLLM.models.all
+        provider_str = provider.to_s
+        @models_cache = all
+          .select { |m| m.provider.to_s == provider_str && m.type.to_s == "chat" }
+          .map { |m| m.id.to_s }
+          .sort
       rescue => e
         puts "Failed to fetch models: #{e.message}".colorize(ERROR_FG)
-        @models_cache = [provider.default_model.to_s]
+        @models_cache = []
       end
 
       @models_cache
     end
 
-    # Swap the global provider to Shell with the given interpreter model.
-    # Saves the current LLM provider so it can be restored later.
+    # Save the current LLM provider symbol when entering a shell-mode agent.
+    # The Execution builds a shell agent with Brute::Providers::Shell internally.
     def activate_shell_agent!(shell_model)
       current = Brute.provider
-      unless current.is_a?(Brute::Providers::Shell)
-        @saved_provider = current
-      end
-      Brute.provider = Brute::Providers::Shell.new
+      @saved_provider ||= current
       @execution.selected_model = shell_model
     end
 
-    # Restore the saved LLM provider when leaving a shell-mode agent.
+    # Restore the saved LLM provider symbol when leaving a shell-mode agent.
     def restore_llm_provider!
       if @saved_provider
         Brute.provider = @saved_provider
@@ -240,11 +262,9 @@ module BruteCLI
     end
 
     def compact_conversation
-      agent = @execution.agent
-      if agent
-        metadata = agent.env&.dig(:metadata) || {}
-        metadata.dig(:tokens, :total) || 0
-      end
+      # Token count is tracked by CLIEventHandler metadata during calls.
+      # For now, return nil since compaction is not yet implemented.
+      nil
     end
 
     # ── Commands ──
@@ -338,15 +358,11 @@ module BruteCLI
         puts separator
       when :set_provider
         provider_name = args.first
-        result = select_provider(provider_name)
-        if result
-          puts separator
-          puts "Provider changed to: #{provider_name.colorize(ACCENT)}"
-          puts "Select a model:".colorize(DIM)
-          cmd_model
-        else
-          puts "Failed to initialize provider: #{provider_name}".colorize(ERROR_FG)
-        end
+        select_provider(provider_name)
+        puts separator
+        puts "Provider changed to: #{provider_name.colorize(ACCENT)}"
+        puts "Select a model:".colorize(DIM)
+        cmd_model
       end
     end
 
@@ -383,7 +399,7 @@ module BruteCLI
 
         # Dynamic: only providers with configured API keys
         menu(:providers, "Select Provider") do |m|
-          configured = Brute.configured_providers
+          configured = BruteCLI::REPL.configured_providers
           current = execution.provider_name
 
           configured.each do |name|
@@ -403,11 +419,13 @@ module BruteCLI
       puts BruteCLI::MONIKER.chomp.colorize(DIM)
       puts separator
       puts "Version #{Brute::VERSION}".colorize(DIM)
-      session = @execution.instance_variable_get(:@session)
-      if session
-        session_dir = File.join(Dir.home, ".brute", "sessions", session.id)
+      sid = @execution.session_id
+      if sid
+        session = @execution.instance_variable_get(:@session)
+        session_path = session&.path || File.join(Execution::SESSIONS_DIR, sid, "session.jsonl")
+        session_dir = File.dirname(session_path)
         puts separator
-        puts "session_id:  ".colorize(DIM) + session.id.colorize(ACCENT)
+        puts "session_id:  ".colorize(DIM) + sid.colorize(ACCENT)
         puts "session_log: ".colorize(DIM) + session_dir.colorize(ACCENT)
       end
       check_dependencies
