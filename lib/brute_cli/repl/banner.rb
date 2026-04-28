@@ -1,5 +1,8 @@
 # frozen_string_literal: true
 
+require "bundler/setup"
+require "brute_cli"
+
 module BruteCLI
   class REPL
     # Pure-data renderer for the startup banner.

@@ -2,7 +2,6 @@
 
 require "reline"
 require "brute_cli/styles"
-require "brute_cli/question_screen"
 
 module BruteCLI
   # REPL wraps an Execution with an interactive read-eval-print loop:

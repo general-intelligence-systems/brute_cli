@@ -1,12 +1,7 @@
 # frozen_string_literal: true
 
+require "bundler/setup"
 require 'brute'
-
-begin # why?
-  require 'brute_flow'
-rescue LoadError
-end
-
 require 'tty-screen'
 
 module BruteCLI
@@ -34,4 +29,3 @@ end
 Dir.glob("#{__dir__}/brute_cli/**/*.rb").sort.each do |path|
   require path
 end
-

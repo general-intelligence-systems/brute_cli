@@ -1,9 +1,12 @@
 # frozen_string_literal: true
 
+
+require "bundler/setup"
+require "brute_cli"
 require "dry/cli"
-require_relative "commands/chat"
-require_relative "commands/sessions"
-require_relative "commands/version"
+require "brute_cli/cli/commands/chat"
+require "brute_cli/cli/commands/sessions"
+require "brute_cli/cli/commands/version"
 
 module BruteCLI
   module CLI

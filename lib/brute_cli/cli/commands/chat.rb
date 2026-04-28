@@ -1,5 +1,7 @@
 # frozen_string_literal: true
 
+require "bundler/setup"
+require "brute_cli"
 require "dry/cli"
 
 module BruteCLI
