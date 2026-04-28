@@ -30,4 +30,6 @@ template = ERB.new(File.read(template_path))
 result = template.result(binding)
 
 File.write(output_path, result)
+
+`bundle install`
 puts "#{current} -> #{version}"
