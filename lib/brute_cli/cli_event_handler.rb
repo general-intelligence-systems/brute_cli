@@ -65,11 +65,22 @@ module BruteCLI
       start_spinner
     end
 
+    # Flush any buffered streamed content through the markdown renderer.
+    # Call at the end of an agent turn, before printing stats.
+    def flush_content
+      @streamer.flush
+    end
+
+    # Reset streamer state for the next agent turn.
+    def reset_content
+      @streamer.reset
+    end
+
     private
 
       def on_content(text)
         pause_spinner do
-          puts text
+          @streamer << text
         end
       end
 
@@ -80,14 +91,22 @@ module BruteCLI
       def on_tool_call_start(tools)
         pause_spinner do
           tools.each do |tool|
-            puts tool
+            output = ToolOutput.for(name: tool[:name], args: tool[:arguments], width: @terminal.width)
+            puts output.header
           end
         end
       end
 
+      SILENT_TOOLS = %w[delegate].freeze
+
       def on_tool_result(name, result)
         pause_spinner do
-          puts name + result
+          icon = ToolOutput.icon_for(name)
+          if SILENT_TOOLS.include?(name.to_s)
+            puts "#{icon} #{name} #{"done".colorize(:green)}"
+          else
+            puts "#{icon} #{name} #{result}"
+          end
         end
       end
   end

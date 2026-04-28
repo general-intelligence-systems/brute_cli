@@ -62,6 +62,7 @@ module BruteCLI
     end
 
     def execute(prompt)
+      @streamer.reset
       @event_handler = build_event_handler
       @event_handler.start_spinner
 
@@ -70,16 +71,19 @@ module BruteCLI
         env = @agent.call(@session, events: @event_handler)
       rescue Interrupt
         @event_handler.stop_spinner
+        @event_handler.flush_content
         print_stats_bar
         return
       rescue => e
         @event_handler.stop_spinner
+        @event_handler.flush_content
         print_error(e)
         print_stats_bar
         return
       end
 
       @event_handler.stop_spinner
+      @event_handler.flush_content
       print_stats_bar
     end
 
@@ -169,10 +173,25 @@ module BruteCLI
       def build_llm_agent
         logger = Logger.new(File::NULL)
 
+        delegate = Brute::SubAgent.new(
+          name:        "delegate",
+          description: "Delegate a research or analysis task to a specialist sub-agent. " \
+                       "The sub-agent can read files and search but cannot write or execute commands. " \
+                       "Use for code analysis, understanding patterns, or gathering information.",
+          provider:    Brute.provider,
+          model:       @model_name,
+          tools:       [Brute::Tools::FSRead, Brute::Tools::FSSearch],
+        ) do
+          use Brute::Middleware::SystemPrompt
+          use Brute::Middleware::ToolResultLoop
+          use Brute::Middleware::ToolCall
+          run Brute::Middleware::LLMCall.new
+        end
+
         Brute::Agent.new(
           provider: Brute.provider,
           model: @model_name,
-          tools: Brute::Tools::ALL,
+          tools: Brute::Tools::ALL + [delegate],
         ) do
           use Brute::Middleware::SystemPrompt
           use Brute::Middleware::Tracing, logger: logger

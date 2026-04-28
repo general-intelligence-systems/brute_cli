@@ -7,100 +7,25 @@ module BruteCLI
 
       ICON = Emoji::GEAR
 
-      TODO_STATUS = {
-        "pending"     => Emoji::SQUARE,
-        "in_progress" => Emoji::ARROWS,
-        "completed"   => Emoji::CHECK,
-        "cancelled"   => Emoji::CROSS,
-      }.freeze
-
-      def initialize(tool_call, width:)
-        @call   = tool_call
-        @width  = width
-        @args   = normalize_args(@call.arguments)
-        @result = @call.result
+      def initialize(name:, args: {}, width: 80)
+        @name  = name.to_s
+        @args  = args.is_a?(Hash) ? args : {}
+        @width = width
       end
 
-      def to_s
-        lines = [header_line]
-        if @call.resolved?
-          lines.concat(body_lines)
-          lines.concat(error_lines) if error?
-        end
-        lines.join("\n")
+      # Icon + colorized name + summary (file path, command, etc.)
+      def header
+        "#{icon} #{@name.colorize(ACCENT_BG)} #{summary}".rstrip
       end
 
       private
 
-      def icon    = self.class::ICON
-      def name    = @call.name.to_s
-
-      def header_line
-        "#{icon} #{name.colorize(ACCENT_BG)} #{summary}".rstrip
-      end
+      def icon = self.class::ICON
 
       def summary = ""
 
-      def body_lines
-        [] # subclasses override
-      end
-
-      # ── Shared helpers ──
-
       def arg(key)
         @args[key.to_s] || @args[key.to_sym]
-      end
-
-      def result_val(key)
-        @result.is_a?(Hash) && (@result[key.to_s] || @result[key.to_sym])
-      end
-
-      def error?
-        @result.is_a?(Hash) && (@result[:error] || @result["error"])
-      end
-
-      def error_lines
-        msg = error_message
-        msg = msg[0..70] + "..." if msg.length > 70
-        ["#{"FAILED".colorize(ERROR_BG)} #{msg.colorize(DIM)}"]
-      end
-
-      def error_message
-        if @result.is_a?(Hash)
-          (
-            @result[:message]  ||
-            @result["message"] ||
-            @result[:error]    ||
-            @result["error"]
-          ).to_s
-        else
-          ""
-        end
-      end
-
-      def diff_lines
-        diff = result_val(:diff)
-        if diff && !diff.to_s.strip.empty?
-          [BruteCLI::Bat.diff_mode(diff, width: @width).chomp]
-        else
-          []
-        end
-      end
-
-      def todo_lines(todos)
-        return [] unless todos && !todos.empty?
-
-        todos.map do |t|
-          t = t.transform_keys(&:to_s) if t.is_a?(Hash)
-          status  = t["status"].to_s
-          ico     = TODO_STATUS[status] || Emoji::SQUARE
-          content = t["content"] || t["id"] || "?"
-          "  #{ico} #{content}"
-        end
-      end
-
-      def normalize_args(args)
-        args.is_a?(Hash) ? args : {}
       end
     end
 
@@ -132,10 +57,16 @@ module BruteCLI
       "todo_write" => TodoWrite,
     }.freeze
 
-    # Returns a ToolOutput instance for the given ToolCall.
-    def self.for(tool_call, width: 80)
-      klass = MAP[tool_call.name.to_s] || Base
-      klass.new(tool_call, width: width)
+    # Build a ToolOutput instance by name.
+    def self.for(name:, args: {}, width: 80)
+      klass = MAP[name.to_s] || Base
+      klass.new(name: name, args: args, width: width)
+    end
+
+    # Just the icon for a given tool name.
+    def self.icon_for(name)
+      klass = MAP[name.to_s] || Base
+      klass::ICON
     end
   end
 end
