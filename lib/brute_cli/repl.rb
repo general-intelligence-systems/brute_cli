@@ -36,148 +36,70 @@ module BruteCLI
 
     def initialize(options = {})
       @execution = Execution.new(options)
+      @terminal = @execution.terminal
       @saved_provider = nil  # stashed LLM provider symbol when in shell-mode agent
     end
 
     # Start the interactive REPL loop.
     def run
       @execution.ensure_session!
-      print_banner
+
+      Banner.new(
+        terminal:     @terminal,
+        session_id:   @execution.session_id,
+        session_path: @execution.session_path,
+      )
+
       @execution.resolve_provider_info
-      setup_reline
+      @input = UserInput.new(@terminal)
 
       loop do
-        result = read_prompt
-        break if result.nil?
-        next if result.empty?
-        break if %w[exit quit].include?(result)
+        status = build_prompt_status
+        result = @input.read_prompt(status)
 
-        # Slash command dispatch
-        if Commands.match?(result)
-          action = handle_command(result)
-          break if action == :exit
+        case result
+        when nil
+          break
+        when ->(r) { r[:type] == :cycle_agent }
+          handle_cycle_agent(result[:direction])
+          @input.refresh_model_line(build_prompt_status)
           next
-        end
+        when ->(r) { r[:type] == :input }
+          text = result[:text]
+          next if text.empty?
+          break if %w[exit quit].include?(text)
 
-        @execution.run(result)
+          if Commands.match?(text)
+            break if handle_command(text) == :exit
+            next
+          end
+
+          @execution.run(text)
+        end
       end
     rescue Interrupt
-      puts
+      @terminal.buffer << ""
     end
 
     private
 
-    # ── Reline ──
-
-    def setup_reline
-      Reline.autocompletion = true
-      Reline.completion_append_character = " "
-      Reline.completion_proc = method(:complete_input)
-
-      Reline.prompt_proc = proc { |lines|
-        prompt_text = current_prompt
-        continuation = ">".rjust(prompt_text.length)
-        lines.map.with_index do |_, i|
-          i == 0 ? prompt_text.colorize(ACCENT_BOLD) + " " : continuation.colorize(DIM) + " "
-        end
-      }
-
-      # Force Reline's config to load now (reads inputrc, registers ANSI
-      # default key bindings).  Without this, the defaults are lazily
-      # applied on the first readmultiline call and overwrite our overrides.
-      unless Reline.core.config.loaded?
-        Reline.core.config.read
-        Reline::IOGate.set_default_key_bindings(Reline.core.config)
-      end
-
-      # Rebind Tab (^I = byte 9) to cycle agents forward when the buffer is
-      # empty, otherwise fall through to normal completion.
-      # Shift+Tab (ESC [ Z = bytes 27,91,90) cycles agents backward.
-      repl = self
-      Reline.line_editor.define_singleton_method(:cycle_or_complete) do |key|
-        if current_line.empty?
-          repl.send(:cycle_agent, :forward)
-          @cache.delete(:prompt_list)
-          @cache.delete(:wrapped_prompt_and_input_lines)
-        else
-          complete(key)
-        end
-      end
-
-      Reline.line_editor.define_singleton_method(:reverse_cycle_agent) do |_key|
-        if current_line.empty?
-          repl.send(:cycle_agent, :backward)
-          @cache.delete(:prompt_list)
-          @cache.delete(:wrapped_prompt_and_input_lines)
-        end
-      end
-
-      Reline.core.config.add_default_key_binding_by_keymap(:emacs, [9], :cycle_or_complete)
-      Reline.core.config.add_default_key_binding_by_keymap(:emacs, [27, 91, 90], :reverse_cycle_agent)
-    end
-
-    # Reline completion callback.
-    # - File paths: typing "./" launches fzf, injects selected path into the buffer.
-    #   Backspacing back to "./" does NOT re-trigger.
-    # - Slash commands: "/" at the beginning of a line.
-    def complete_input(target, preposing = "", _postposing = "")
-      prev = @last_completion_target
-      @last_completion_target = target
-
-      # ./ triggers fzf file picker (only on forward typing, not backspace)
-      if target == "./"
-        backspacing = prev&.start_with?("./") && prev.length > target.length
-        unless backspacing
-          path = fzf_pick_file
-          if path
-            cursor = Reline.point
-            Reline.delete_text(cursor - target.bytesize, target.bytesize)
-            Reline.point = cursor - target.bytesize
-            Reline.insert_text(path)
-          end
-          # Invalidate Reline's render cache so it fully redraws prompt + buffer
-          Reline.line_editor.send(:clear_rendered_screen_cache)
-          Reline.redisplay
-        end
-        return []
-      end
-
-      # Slash commands at start of line
-      if (preposing.nil? || preposing.strip.empty?) && target.start_with?("/")
-        return Commands.names.select { |name| name.start_with?(target) }
-      end
-
-      []
-    end
-
-    def read_prompt
-      puts BufferOutput::ModelLine.new(
+    def build_prompt_status
+      PromptStatus.new(
         provider_name: @execution.provider_name,
-        model_short: @execution.model_short,
+        model_short:   @execution.model_short,
         current_agent: @execution.current_agent,
       )
-      input = Reline.readmultiline(current_prompt.colorize(ACCENT_BOLD) + " ", true) { |t| !t.rstrip.end_with?("\\") }
-      return nil if input.nil?
-
-      input.gsub(/\\\n/, "\n").strip
     end
 
-    def current_prompt
-      "%"
-    end
+    # ── Agent cycling ──
 
-    # ── Interactive selection ──
-    # Model, provider, and agent selection are REPL concerns — Execution
-    # only knows the configuration it's given.
-
-    def cycle_agent(direction = :forward)
+    def handle_cycle_agent(direction)
       agents = Execution::AGENTS
       shell_agents = Execution::SHELL_AGENTS
       step = direction == :backward ? -1 : 1
       idx = (agents.index(@execution.current_agent) + step) % agents.size
       new_agent = agents[idx]
 
-      # Switch provider when entering/leaving shell-mode agents.
       if (shell_model = shell_agents[new_agent])
         activate_shell_agent!(shell_model)
       else
@@ -187,16 +109,6 @@ module BruteCLI
       @execution.current_agent = new_agent
       reset_agent!
       @execution.resolve_provider_info
-
-      # Rewrite the model/status line sitting one line above the prompt.
-      # Save cursor, move up, clear line, print, restore cursor.
-      line = BufferOutput::ModelLine.new(
-        provider_name: @execution.provider_name,
-        model_short: @execution.model_short,
-        current_agent: @execution.current_agent,
-      ).to_s
-      $stdout.print "\e[s\e[A\r\e[2K#{line}\e[u"
-      $stdout.flush
     end
 
     def select_model(model_id)
@@ -232,7 +144,7 @@ module BruteCLI
           .map { |m| m.id.to_s }
           .sort
       rescue => e
-        puts "Failed to fetch models: #{e.message}".colorize(ERROR_FG)
+        @terminal.buffer << "Failed to fetch models: #{e.message}".colorize(ERROR_FG)
         @models_cache = []
       end
 
@@ -240,7 +152,6 @@ module BruteCLI
     end
 
     # Save the current LLM provider symbol when entering a shell-mode agent.
-    # The Execution builds a shell agent with Brute::Providers::Shell internally.
     def activate_shell_agent!(shell_model)
       current = Brute.provider
       @saved_provider ||= current
@@ -262,19 +173,16 @@ module BruteCLI
     end
 
     def compact_conversation
-      # Token count is tracked by CLIEventHandler metadata during calls.
-      # For now, return nil since compaction is not yet implemented.
       nil
     end
 
     # ── Commands ──
 
-    # Dispatch a slash command. Returns :exit to break the REPL loop, or nil.
     def handle_command(input)
       entry = Commands.find(input)
       unless entry
-        puts "Unknown command: #{input.split(/\s+/).first}".colorize(ERROR_FG)
-        puts "Type /help for available commands.".colorize(DIM)
+        @terminal.buffer << "Unknown command: #{input.split(/\s+/).first}".colorize(ERROR_FG)
+        @terminal.buffer << "Type /help for available commands.".colorize(DIM)
         return nil
       end
 
@@ -282,13 +190,13 @@ module BruteCLI
     end
 
     def cmd_help
-      puts separator
-      puts "Available commands:".colorize(ACCENT_BOLD)
-      puts
+      @terminal.buffer << @terminal.separator
+      @terminal.buffer << "Available commands:".colorize(ACCENT_BOLD)
+      @terminal.buffer << ""
       Commands::REGISTRY.each do |entry|
-        puts "  #{entry.name.ljust(12).colorize(ACCENT)}  #{entry.description.colorize(DIM)}"
+        @terminal.buffer << "  #{entry.name.ljust(12).colorize(ACCENT)}  #{entry.description.colorize(DIM)}"
       end
-      puts separator
+      @terminal.buffer << @terminal.separator
       nil
     end
 
@@ -299,11 +207,11 @@ module BruteCLI
     def cmd_compact
       tokens = compact_conversation
       if tokens
-        puts "Compacting conversation...".colorize(DIM)
-        puts "Current token count: #{tokens}".colorize(DIM)
-        puts "Manual compaction not yet implemented.".colorize(DIM)
+        @terminal.buffer << "Compacting conversation...".colorize(DIM)
+        @terminal.buffer << "Current token count: #{tokens}".colorize(DIM)
+        @terminal.buffer << "Manual compaction not yet implemented.".colorize(DIM)
       else
-        puts "No active conversation to compact.".colorize(DIM)
+        @terminal.buffer << "No active conversation to compact.".colorize(DIM)
       end
       nil
     end
@@ -347,21 +255,20 @@ module BruteCLI
       nil
     end
 
-    # Process action tuples returned by the menu system.
     def handle_menu_action(action, *args)
       case action
       when :set_model
         model_id = args.first
         select_model(model_id)
-        puts separator
-        puts "Model changed to: #{model_id.colorize(ACCENT)}"
-        puts separator
+        @terminal.buffer << @terminal.separator
+        @terminal.buffer << "Model changed to: #{model_id.colorize(ACCENT)}"
+        @terminal.buffer << @terminal.separator
       when :set_provider
         provider_name = args.first
         select_provider(provider_name)
-        puts separator
-        puts "Provider changed to: #{provider_name.colorize(ACCENT)}"
-        puts "Select a model:".colorize(DIM)
+        @terminal.buffer << @terminal.separator
+        @terminal.buffer << "Provider changed to: #{provider_name.colorize(ACCENT)}"
+        @terminal.buffer << "Select a model:".colorize(DIM)
         cmd_model
       end
     end
@@ -384,7 +291,6 @@ module BruteCLI
           choice "Back", :main
         end
 
-        # Dynamic: models from the current provider
         menu(:models, "Select Model") do |m|
           models = repl.send(:fetch_models)
           current = execution.model_name
@@ -397,7 +303,6 @@ module BruteCLI
           m.choice "Back", :main
         end
 
-        # Dynamic: only providers with configured API keys
         menu(:providers, "Select Provider") do |m|
           configured = BruteCLI::REPL.configured_providers
           current = execution.provider_name
@@ -410,63 +315,6 @@ module BruteCLI
           m.choice "Back", :main
         end
       end
-    end
-
-    # ── UI ──
-
-    def print_banner
-      puts separator
-      puts BruteCLI::MONIKER.chomp.colorize(DIM)
-      puts separator
-      puts "Version #{Brute::VERSION}".colorize(DIM)
-      sid = @execution.session_id
-      if sid
-        session = @execution.instance_variable_get(:@session)
-        session_path = session&.path || File.join(Execution::SESSIONS_DIR, sid, "session.jsonl")
-        session_dir = File.dirname(session_path)
-        puts separator
-        puts "session_id:  ".colorize(DIM) + sid.colorize(ACCENT)
-        puts "session_log: ".colorize(DIM) + session_dir.colorize(ACCENT)
-      end
-      check_dependencies
-      puts separator
-      puts "Type /help for available commands.".colorize(DIM)
-      puts separator
-    end
-
-    def check_dependencies
-      missing = []
-      missing << ["bat",  "https://github.com/sharkdp/bat#installation", "diff syntax highlighting"]  unless BruteCLI::Bat.available?
-      missing << ["fzf",  "https://github.com/junegunn/fzf#installation", "interactive selection"]    unless fzf_on_path?
-      return if missing.empty?
-
-      puts separator
-      missing.each do |name, url, purpose|
-        $stderr.puts " #{name} not found — recommended for #{purpose}.\n Install: #{url} ".colorize(background: :red, color: :white)
-      end
-    end
-
-    def separator
-      BufferOutput::Separator.new(width: @execution.detect_width)
-    end
-
-    def fzf_on_path?
-      ENV["PATH"].to_s.split(File::PATH_SEPARATOR).any? { |dir| File.executable?(File.join(dir, "fzf")) }
-    end
-
-    # Launch fzf inline and return the selected path as ./relative, or nil.
-    def fzf_pick_file
-      return nil unless fzf_on_path?
-
-      selected = `git ls-files --cached --others --exclude-standard 2>/dev/null | fzf --prompt='Select File › ' --height=~20 --reverse --no-info`
-      return nil unless $?.success?
-
-      selected = selected.strip
-      return nil if selected.empty?
-
-      selected.start_with?("/", "./", "../") ? selected : "./#{selected}"
-    rescue Errno::ENOENT
-      nil
     end
   end
 end

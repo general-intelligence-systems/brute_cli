@@ -19,7 +19,7 @@ module BruteCLI
           ":spinner #{label}",
           frames: frames,
           interval: interval,
-          output: $stdout,
+          output: @output,
           clear: true,
         )
         @tty.auto_spin
@@ -39,7 +39,7 @@ module BruteCLI
       end
 
       def frames
-        bar = "━" * 12
+        bar = "\u2501" * 12
         bar.length.times.map do |offset|
           bar.chars.map.with_index { |c, i| RAINBOW[(i + offset) % RAINBOW.length] + c }.join + RESET
         end

@@ -9,7 +9,14 @@ module BruteCLI
     #   #stop      – halt the spinner animation
     #   #spinning? – whether the spinner is currently animating
     #
+    # All spinners receive an +output+ IO via the constructor so they
+    # write through the Terminal buffer rather than directly to $stdout.
+    #
     class Base
+      def initialize(output: $stdout)
+        @output = output
+      end
+
       def start
         raise NotImplementedError, "#{self.class.name} must implement #start"
       end

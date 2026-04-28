@@ -8,19 +8,6 @@ rescue LoadError
 end
 
 require 'tty-screen'
-require 'brute_cli/version'
-require 'brute_cli/styles'
-require 'brute_cli/emoji'
-require 'brute_cli/bat'
-require 'brute_cli/stream_formatter'
-require 'brute_cli/fzf_menu'
-require 'brute_cli/commands'
-require 'brute_cli/spinner'
-require 'brute_cli/configuration'
-require 'brute_cli/buffer_output'
-require 'brute_cli/cli_event_handler'
-require 'brute_cli/execution'
-require 'brute_cli/repl'
 
 module BruteCLI
   MONIKER = <<~MONIKER
@@ -43,3 +30,8 @@ module BruteCLI
     $stderr.puts "warning: #{message}".colorize(DIM)
   end
 end
+
+Dir.glob("#{__dir__}/brute_cli/**/*.rb").sort.each do |path|
+  require path
+end
+

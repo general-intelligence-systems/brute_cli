@@ -11,8 +11,8 @@ require "brute_cli/tool_output"
 
 module BruteCLI
   # Execution encapsulates running a single prompt (or repeated prompts) against
-  # an agent, streaming output to the terminal.  It owns the agent lifecycle,
-  # streaming callbacks, spinner, and stats rendering.
+  # an agent, streaming output to the terminal.  It owns the agent lifecycle
+  # and stats rendering; streaming/rendering is handled by CLIEventHandler.
   #
   # Use directly for non-interactive (pipe / single-prompt) mode:
   #
@@ -21,10 +21,6 @@ module BruteCLI
   # Or let BruteCLI::REPL wrap it for interactive use.
   class Execution
     AGENTS = %w[build plan bash ruby python nix].freeze
-
-    SAVE_CURSOR    = "\e7"
-    RESTORE_CURSOR = "\e8"
-    CLEAR_TO_END   = "\e[J"
 
     # Shell-mode agents: agent name -> shell interpreter (model name).
     # These agents use the Shell provider instead of the current LLM provider.
@@ -38,22 +34,25 @@ module BruteCLI
     # Default sessions directory: ~/.brute/sessions/
     SESSIONS_DIR = File.join(Dir.home, ".brute", "sessions")
 
-    attr_reader :current_agent, :provider_name, :model_name
+    attr_reader :current_agent, :provider_name, :model_name, :terminal
     attr_accessor :agent
     attr_writer :selected_model, :current_agent
 
+    # Expose session path for Banner display (read-only).
+    def session_path
+      @session&.path
+    end
+
     def initialize(options = {})
       @options = options
+      @terminal = options[:terminal] || Terminal.new
       @current_agent = AGENTS.first
       @agent = nil
       @session = nil
       @selected_model = nil    # user-chosen model override (nil = provider default)
-      @width = TTY::Screen.width
-      @streamer = StreamFormatter.new(width: @width)
+      @streamer = StreamFormatter.new(output: @terminal.buffer.io, width: @terminal.width)
       spinner_class = options[:spinner] || BruteCLI.config.spinner
-      @spinner = spinner_class.new
-      @last_output = nil  # :separator, :content, or :tool — used to deduplicate separators
-      @current_phase = nil
+      @spinner = spinner_class.new(output: @terminal.buffer.io)
       @event_handler = nil
     end
 
@@ -64,32 +63,30 @@ module BruteCLI
     end
 
     def execute(prompt)
-      @current_phase = nil
-      @streamer.reset
-      @last_output = nil
-
-      start_spinner
+      @event_handler = build_event_handler
+      @event_handler.reset!
+      @event_handler.start_spinner
 
       begin
-        @event_handler = build_event_handler
         @session.user(prompt)
-        @agent.call(@session, events: @event_handler)
+        env = @agent.call(@session, events: @event_handler)
+        @event_handler.merge_metadata!(env[:metadata])
       rescue Interrupt
-        stop_spinner
-        flush_content
-        puts "Aborted.".colorize(DIM)
+        @event_handler.stop_spinner
+        @event_handler.flush_content
+        @terminal.buffer << "Aborted.".colorize(DIM)
         print_stats_bar
         return
       rescue => e
-        stop_spinner
-        flush_content
+        @event_handler.stop_spinner
+        @event_handler.flush_content
         print_error(e)
         print_stats_bar
         return
       end
 
-      stop_spinner
-      flush_content
+      @event_handler.stop_spinner
+      @event_handler.flush_content
       print_stats_bar
     end
 
@@ -117,7 +114,7 @@ module BruteCLI
       return if @session
 
       if @options[:session_id]
-        path = session_path(@options[:session_id])
+        path = build_session_path(@options[:session_id])
         if File.exist?(path)
           @session = Brute::Session.from_jsonl(path)
         else
@@ -125,7 +122,7 @@ module BruteCLI
         end
       else
         id = SecureRandom.hex(8)
-        @session = Brute::Session.new(path: session_path(id))
+        @session = Brute::Session.new(path: build_session_path(id))
       end
     end
 
@@ -135,10 +132,6 @@ module BruteCLI
       ensure_session!
       resolve_provider_info
       @agent = build_agent
-    end
-
-    def detect_width
-      TTY::Screen.width
     end
 
     # Session ID derived from the session path.
@@ -166,7 +159,7 @@ module BruteCLI
 
       # ── Session Path ──
 
-      def session_path(id)
+      def build_session_path(id)
         File.join(SESSIONS_DIR, id, "session.jsonl")
       end
 
@@ -185,13 +178,12 @@ module BruteCLI
 
         Brute::Agent.new(
           provider: Brute.provider,
-          model: @selected_model,
+          model: @model_name,
           tools: Brute::Tools::ALL,
         ) do
           use Brute::Middleware::SystemPrompt
           use Brute::Middleware::Tracing, logger: logger
           use Brute::Middleware::ToolResultLoop
-          use Brute::Middleware::MaxIterations
           use Brute::Middleware::ToolCall
           run Brute::Middleware::LLMCall.new
         end
@@ -206,130 +198,49 @@ module BruteCLI
           tools: [Brute::Tools::Shell],
         ) do
           use Brute::Middleware::ToolResultLoop
-          use Brute::Middleware::MaxIterations, max_iterations: 2
           use Brute::Middleware::ToolCall
           run ShellCallTerminal.new(shell_provider)
         end
       end
 
-      # Build the event handler for this call, wired to this Execution.
       def build_event_handler
-        CLIEventHandler.new(Brute::Pipeline::NullSink.new, execution: self)
-      end
-
-      # ── Spinner ──
-
-      def start_spinner
-        stop_spinner
-
-        unless @last_output == :separator
-          puts BufferOutput::Separator.new(width: @width)
-          @last_output = :separator
-        end
-
-        @spinner.start
-      end
-
-      def stop_spinner
-        if @spinner.spinning?
-          @spinner.stop
-        end
-      end
-
-      # ── Callbacks ──
-      #
-      # Called by CLIEventHandler when events arrive from the agent pipeline.
-      # All callbacks fire sequentially — no synchronization needed.
-      #
-      #   on_content* → on_tool_call_start → on_tool_result* → (repeat)
-      #
-
-      def on_content(text)
-        stop_spinner
-        unless @current_phase.is_a?(Phase::ContentPhase)
-          puts BufferOutput::Separator.new(width: @width) unless @last_output == :separator
-          @current_phase = Phase::ContentPhase.new(@streamer)
-        end
-        @current_phase.append(text)
-        @last_output = :content
-      end
-
-      def on_reasoning(_text); end
-
-      # Receives the full batch of tool calls for this LLM turn.
-      # Renders all tool call headers upfront.
-      def on_tool_call_start(calls)
-        stop_spinner
-        flush_content
-
-        @current_phase = Phase::ToolPhase.new(calls)
-
-        puts BufferOutput::Separator.new(width: @width) unless @last_output == :separator
-        print SAVE_CURSOR
-        render_tool_phase
-        @last_output = :tool
-
-        start_spinner
-      end
-
-      # Fires once per tool as each completes.
-      # Re-renders the entire tool phase block.
-      def on_tool_result(name, result)
-        stop_spinner
-
-        if @current_phase.is_a?(Phase::ToolPhase)
-          @current_phase.resolve(name, result)
-
-          print RESTORE_CURSOR
-          print CLEAR_TO_END
-          render_tool_phase
-          @last_output = :tool
-          start_spinner
-        end
-      end
-
-      # ── Output ──
-
-      def flush_content
-        if @current_phase.is_a?(Phase::ContentPhase)
-          @current_phase.finish
-          @last_output = :content unless @current_phase.empty?
-        end
-      end
-
-      # Render every tool call in the current ToolPhase.
-      # Resolved calls show header + body + error; pending calls show header only.
-      def render_tool_phase
-        @current_phase.tool_calls.each do |call|
-          puts ToolOutput.for(call, width: @width)
-        end
-      end
-
-      def render_markdown(text)
-        BruteCLI::Bat.markdown_mode(text.strip, width: @width)
+        CLIEventHandler.new(
+          Brute::Pipeline::NullSink.new,
+          terminal: @terminal,
+          spinner:  @spinner,
+          streamer: @streamer,
+        )
       end
 
       # ── Stats ──
 
       def print_stats_bar
         metadata = @event_handler&.metadata || {}
-        puts BufferOutput::Separator.new(width: @width) unless @last_output == :separator
-        puts BufferOutput::StatsBar.new(metadata, width: @width)
-        puts BufferOutput::Separator.new(width: @width, thick: true)
+        @terminal.buffer << @terminal.separator
+        @terminal.buffer << BufferOutput::StatsBar.new(metadata, width: @terminal.width)
+        @terminal.buffer << @terminal.separator(thick: true)
       end
 
       # ── Error ──
 
       def print_error(err)
-        puts BufferOutput::Error.new(err)
+        @terminal.buffer << BufferOutput::Error.new(err)
       end
 
       # ── Provider Helpers ──
 
+      PROVIDER_DEFAULT_MODELS = {
+        anthropic:  "claude-sonnet-4-20250514",
+        openai:     "gpt-4.1",
+        gemini:     "gemini-2.5-flash",
+        deepseek:   "deepseek-chat",
+        mistral:    "mistral-large-latest",
+        openrouter: "anthropic/claude-sonnet-4-20250514",
+        xai:        "grok-3",
+      }.freeze
+
       def default_model_for(provider_sym)
-        # Use RubyLLM to look up the default model for a provider if possible.
-        # Falls back to nil (let the provider decide).
-        nil
+        PROVIDER_DEFAULT_MODELS[provider_sym&.to_sym]
       end
 
       # ── Shell Agent Terminal ──

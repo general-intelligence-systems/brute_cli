@@ -13,7 +13,7 @@ module BruteCLI
           ":spinner",
           frames: FRAMES,
           interval: 200,
-          output: $stdout,
+          output: @output,
           clear: true,
         )
         @tty.auto_spin

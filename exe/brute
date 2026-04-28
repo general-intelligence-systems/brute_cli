@@ -1,53 +1,8 @@
 #!/usr/bin/env ruby
 # frozen_string_literal: true
 
+require "bundler/setup"
 require "brute_cli"
-require "optparse"
+require "dry/cli"
 
-options = { cwd: Dir.pwd, session_id: nil }
-
-OptionParser.new do |opts|
-  opts.banner = "Usage: brute [options] [prompt]"
-  opts.on("-d", "--directory DIR", "Working directory") { |d| options[:cwd] = File.expand_path(d) }
-  opts.on("-s", "--session ID", "Resume a session")    { |id| options[:session_id] = id }
-  opts.on("--list-sessions", "List saved sessions")    { options[:list] = true }
-  opts.on("--theme NAME", "Color theme (#{BruteCLI::THEMES.keys.join(', ')})") { |t| options[:theme] = t }
-  opts.on("-v", "--version", "Show version")           { puts "brute #{Brute::VERSION}"; exit }
-  opts.on("-h", "--help", "Show help")                 { puts opts; exit }
-end.parse!
-
-BruteCLI.apply_theme!(options[:theme]) if options[:theme]
-
-if options[:list]
-  sessions = BruteCLI::Execution.list_sessions
-  if sessions.empty?
-    puts "No saved sessions."
-  else
-    sessions.each do |s|
-      puts "#{s[:id]}  #{s[:mtime].strftime('%Y-%m-%d %H:%M:%S')}"
-    end
-  end
-
-  exit
-end
-
-begin
-  prompt = ARGV.join(" ")
-  prompt = $stdin.read.strip if prompt.empty? && !$stdin.tty?
-
-  if prompt.empty?
-    # Interactive mode
-    BruteCLI::REPL.new(options).run
-  else
-    # Single prompt mode
-    BruteCLI::Execution.new(options).run(prompt)
-    puts
-  end
-rescue Interrupt
-  $stderr.puts "\nAborted."
-  exit 130
-rescue => e
-  BruteCLI.error(e.message)
-  $stderr.puts "  #{e.backtrace&.first}" if ENV["BRUTE_DEBUG"]
-  exit 1
-end
+Dry::CLI.new(BruteCLI::CLI::Commands).call

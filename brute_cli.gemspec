@@ -25,6 +25,7 @@ Gem::Specification.new do |spec|
   spec.add_dependency 'tty-markdown', '~> 0.7'
   spec.add_dependency 'tty-screen', '~> 0.8'
   spec.add_dependency 'bubbletea', '~> 0.1'
+  spec.add_dependency 'dry-cli'
   spec.add_dependency 'lipgloss', '~> 0.2'
   spec.add_dependency 'bubbles', '~> 0.1'
   spec.add_dependency 'tty-spinner', '~> 0.9'

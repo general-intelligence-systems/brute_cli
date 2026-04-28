@@ -7,7 +7,7 @@ module BruteCLI
     class Dots < Base
       def start
         stop if spinning?
-        @tty = TTY::Spinner.new(output: $stdout, clear: true)
+        @tty = TTY::Spinner.new(output: @output, clear: true)
         @tty.auto_spin
       end
 
