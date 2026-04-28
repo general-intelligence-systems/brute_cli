@@ -70,7 +70,9 @@ module BruteCLI
       begin
         @session.user(prompt)
         env = @agent.call(@session, events: @event_handler)
-        @event_handler.merge_metadata!(env[:metadata])
+        if env.is_a?(Hash) && env[:metadata].is_a?(Hash)
+          @event_handler.merge_metadata!(env[:metadata])
+        end
       rescue Interrupt
         @event_handler.stop_spinner
         @event_handler.flush_content
