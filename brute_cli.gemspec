@@ -10,7 +10,12 @@ Gem::Specification.new do |spec|
   spec.description   = 'Interactive command-line interface for the Brute coding agent. ' \
                         'Supports single-prompt, interactive, piped, and session modes.'
   spec.license       = 'MIT'
+  spec.homepage      = 'https://github.com/general-intelligence-systems/brute_cli'
   spec.required_ruby_version = '>= 3.0'
+
+  spec.metadata = {
+    "documentation_uri" => "https://general-intelligence-systems.github.io/brute_cli/",
+  }
 
   spec.files         = Dir['lib/**/*.rb', 'exe/*']
   spec.bindir        = 'exe'
