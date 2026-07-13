@@ -34,5 +34,6 @@ Gem::Specification.new do |spec|
   spec.add_dependency 'lipgloss', '~> 0.2'
   spec.add_dependency 'bubbles', '~> 0.1'
   spec.add_dependency 'tty-spinner', '~> 0.9'
+  spec.add_development_dependency "lefthook", "~> 2.1"
 
 end
