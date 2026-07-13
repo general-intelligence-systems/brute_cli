@@ -13,7 +13,8 @@
       {
         devShells.default = pkgs.mkShell {
           nativeBuildInputs = [ pkgs.pkg-config ];
-          buildInputs = [ ruby pkgs.libyaml pkgs.openssl ];
+          buildInputs = [
+            pkgs.trufflehog ruby pkgs.libyaml pkgs.openssl ];
           shellHook = ''
           export GEM_HOME="$HOME/.gem-${ruby.version}"
           export GEM_PATH="$GEM_HOME"
