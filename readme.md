@@ -1,5 +1,7 @@
 # brute_cli
 
+[![Ask DeepWiki](https://deepwiki.com/badge.svg)](https://deepwiki.com/general-intelligence-systems/brute_cli)
+
 Command-line interface for the [Brute](https://github.com/general-intelligence-systems/brute) coding agent.
 
 ## Usage
